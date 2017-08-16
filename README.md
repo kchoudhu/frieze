@@ -10,8 +10,8 @@ Here is a sample Frieze session:
 ```python
 import frieze
 
-# Set context
-frieze.set_context('anserinae.net')
+# Set domain
+domain = frieze.set_domain('anserinae.net')
 
 # Define a new compute node
 host = new frieze.host({
@@ -35,11 +35,15 @@ storage = new frieze.host({
 })
 
 site.add_host(storage)
+
+domain.add_site(site)
+
+domain.deploy()
 ```
 
 ```host```, ```sitebastion``` and ```storage``` are all objects derived from ```FriezeNode```, which encapsulates a machine's hardware, network links, services and certificates.
 
-```site``` is a ```FriezeSite``` object, which represents a set of ```FriezeNodes``` which can talk to each other without additional routing.
+```site``` is a ```FriezeSite``` object, which represents a set of ```FriezeNodes``` which can talk to each other without additional routing. ```site```s are grouped together into
 
 ```frieze.host()``` can be initiated with any of these types:
 
@@ -47,7 +51,6 @@ site.add_host(storage)
 * *hvnode*: a hypervisor node represented in code by ```FriezeHV```, used to host one or more *node*s.
 * *storage*: a node that uses ZFS trickery to store ```site``` state. It is represented in code by objects of type ```FriezeStorage```.
 * *sitebastion*: a special node used to route traffic between multiple nodes on the same network. Collectively, a sitebastion and its child nodes form a site.
-* *siterouter*: a node used to route traffic between sites.
+* *siterouter*: a node used to route traffic between sites. Collectively, a group of sites forms a *domain*.
 
 It is possible to define highly complex topologies using these primitives. An example of what is possible follows.
-
