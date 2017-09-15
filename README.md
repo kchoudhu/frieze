@@ -3,7 +3,7 @@ Frieze
 
 Frieze is a python frontend for Ansible that makes orchestrating hardware, services and configuration slightly less maddening by allowing you to gather groups of machines into sites and securely route traffic between them.
 
-##### Preliminaries
+#### Preliminaries
 
 Here is a sample Frieze session:
 
@@ -50,7 +50,7 @@ domain.deploy()
 * *node*: a compute unit, represented by ```FriezeNode``` and used to host ```FriezeService```-s. Can be either a physical machine or virtual construct (see *hvnode* below).
 * *hvnode*: a hypervisor node represented in code by ```FriezeHV```, used to host one or more *node*s.
 * *storage*: a node that uses ZFS trickery to store ```site``` state. It is represented in code by objects of type ```FriezeStorage```.
-* *sitebastion*: a special node used to route traffic between multiple nodes on the same network. Collectively, a sitebastion and its child nodes form a site. There is precisely one ```sitebastion``` per ```site```.
-* *siterouter*: a node used to route traffic between sites. Collectively, a group of sites forms a *domain*.
+* *sitebastion*: a special node used to route traffic between multiple nodes on the same network. Collectively, a ```sitebastion``` and its child nodes form a site. There is precisely one ```sitebastion``` per ```site```.
+* *siterouter*: a node used to route traffic between sites. Collectively, a group of sites forms a *domain*. ```siterouters``` only accept connections from ```sitebastions```.
 
-It is possible to define highly complex topologies using these primitives. An example of what is possible follows.
+It is possible to define highly complex topologies using these primitives.
