@@ -29,7 +29,7 @@ sitebastion = frieze.host({
 site = frieze.site([sitebastion, host])
 
 # Add some storage
-storage = new frieze.host({
+storage = frieze.host({
     'name' : 'unyieldinghierophant',
     'type' : 'storage'
 })
