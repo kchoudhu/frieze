@@ -14,19 +14,19 @@ import frieze
 domain = frieze.set_domain('anserinae.net')
 
 # Define a new compute node
-host = new frieze.host({
+host = frieze.host({
     'name' : 'ascendantjustice',
     'type' : 'node'
 })
 
 # Define a sitebastion for the site
-sitebastion = new frieze.host({
+sitebastion = frieze.host({
     'name' : 'instatllation01',
     'type' : 'sitebastion'
 })
 
 # Create a site definition
-site = new frieze.site([sitebastion, host])
+site = frieze.site([sitebastion, host])
 
 # Add some storage
 storage = new frieze.host({
@@ -38,7 +38,7 @@ site.add_host(storage)
 
 domain.add_site(site)
 
-domain.deploy()
+domain.deploy('QA')
 ```
 
 ```host```, ```sitebastion``` and ```storage``` are all objects derived from ```FriezeNode```, which encapsulates a machine's hardware, network links, services and certificates.
