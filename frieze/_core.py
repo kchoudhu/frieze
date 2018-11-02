@@ -31,7 +31,7 @@ class OAG_FriezeDomain(OAG_RootNode):
             site = OAG_FriezeSite((self, sitename), 'by_name')
         except OAGraphRetrieveError:
             site =\
-                OAG_FriezeSite().db.create({
+                OAG_FriezeSite(initprms={
                     'domain'   : self,
                     'sitename' : sitename,
                 })
@@ -49,7 +49,7 @@ class OAG_FriezeSite(OAG_RootNode):
 
     @staticproperty
     def streams(cls): return {
-        'domain'   : [ OAG_FriezeDomain, None,  None ],
+        'domain'   : [ OAG_FriezeDomain, True,  None ],
         'sitename' : [ 'text',           str(), None ]
     }
 
@@ -65,7 +65,7 @@ def set_domain(domain):
         domain = OAG_FriezeDomain(domain, 'by_domain')
     except OAGraphRetrieveError:
         domain =\
-            OAG_FriezeDomain().db.create({
+            OAG_FriezeDomain(initprms={
                 'domain' : domain
             })
 
