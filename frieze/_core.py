@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 __all__ = ['FriezeDomain', 'set_domain',]
 
 from enum import Enum
