@@ -18,6 +18,6 @@ dbinit:
 test:
 	# Todo: replace this with TAP output
 	@echo "Running tests"
-	python3 -m unittest discover ./{${PROJECT}}/tests -p ${PYTEST_FILE_PATTERN}
+	python3 -m unittest discover ./${PROJECT}/tests -p ${PYTEST_FILE_PATTERN}
 
 testclean: dbinit test
