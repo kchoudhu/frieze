@@ -9,7 +9,7 @@ from openarc.exception import OAGraphRetrieveError
 
 ####### Database structures, be nice
 
-class OAG_FriezeDomain(OAG_RootNode):
+class OAG_Domain(OAG_RootNode):
     @property
     def is_unique(cls): return True
 
@@ -38,7 +38,7 @@ class OAG_FriezeDomain(OAG_RootNode):
 
         return site
 
-class OAG_FriezeSite(OAG_RootNode):
+class OAG_Site(OAG_RootNode):
     @property
     def context(cls): return "frieze"
 
@@ -55,8 +55,8 @@ class OAG_FriezeSite(OAG_RootNode):
 
 ####### Exportable friendly names go here
 
-FriezeDomain = OAG_FriezeDomain
-FriezeSite = OAG_FriezeSite
+Domain = OAG_FriezeDomain
+Site = OAG_FriezeSite
 
 ####### User api goes here
 
