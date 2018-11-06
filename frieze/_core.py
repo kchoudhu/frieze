@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'set_domain',]
+__all__ = ['Domain', 'Site', 'Host', 'Netif', 'set_domain',]
 
 import enum
 
 from openarc import staticproperty, oagprop
+from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
-from openarc.exception import OAGraphRetrieveError
+from openarc.exception import OAGraphRetrieveError, OAError
 
 ####### Database structures, be nice
 
@@ -57,7 +58,6 @@ class OAG_Site(OAG_RootNode):
     }
 
     def add_host(self, **hostprms):
-        print(hostprms)
         try:
             site = OAG_Host((self, hostprms['name']), 'by_name')
         except OAGraphRetrieveError:
@@ -73,6 +73,54 @@ class OAG_Site(OAG_RootNode):
                 })
         return site
 
+class OAG_NetIface(OAG_RootNode):
+    class Type(enum.Enum):
+        PHYSICAL    = 1
+        OVPN_SERVER = 2
+        OVPN_CLIENT = 3
+        VLAN        = 4
+        BRIDGE      = 5
+
+    class IPstyle(enum.Enum):
+        DCHP   = 1
+        STATIC = 2
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+        'name' : [ ['host', 'name'], True, None ],
+    }
+
+    @staticproperty
+    def streams(cls): return {
+        'host'      : [ OAG_Host,     True,  None ],
+        'name'      : [ 'text',       True,  None ],
+        'type'      : [ 'int',        False, None ],
+        'mac'       : [ 'text',       False, None ],
+        'wireless'  : [ 'boolean',    True,  None ],
+        # Interface is part of a bridge
+        'bridge'    : [ OAG_NetIface, False, None ],
+        # Interface is a vlan cloned off vlanhost
+        'vlanhost'  : [ OAG_NetIface, False, None ]
+    }
+
+    @oagprop
+    def vlans(self, **kwargs):
+        if self.type==self.Type.PHYSICAL.value:
+            return self.net_iface_vlanhost
+        else:
+            OAError("Non-physical interfaces can't clone vlans")
+
+    @oagprop
+    def bridge_members(self, **kwargs):
+        if self.type==self.Type.BRIDGE.value:
+            return self.net_iface_bridge
+        else:
+            OAError("Non-bridge interfaces can't have bridge members")
+
+
 class OAG_Host(OAG_RootNode):
     class Provider(enum.Enum):
         DIGITALOCEAN = 1
@@ -85,7 +133,7 @@ class OAG_Host(OAG_RootNode):
         COMPUTE      = 3
         STORAGE      = 4
 
-    @property
+    @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
@@ -108,10 +156,37 @@ class OAG_Host(OAG_RootNode):
     def fqdn(self):
         return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
 
+    def add_iface(self, name, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
+        try:
+            iface = OAG_NetIface((self, name), 'by_name')
+        except OAGraphRetrieveError:
+            iface =\
+                OAG_NetIface().db.create({
+                    'host'     : self,
+                    'name'     : name,
+                    'type'     : type_.value,
+                    'mac'      : mac,
+                    'wireless' : wireless,
+                })
+        return iface
+
+    def add_clone_iface(self, name, type_, bridge_components):
+        with OADbTransaction("Bridge creation"):
+            clone = self.add_iface(name, type_=type_)
+            for iface in bridge_components:
+                if type_==OAG_NetIface.Type.BRIDGE:
+                    iface.bridge = clone
+                    iface.db.update()
+                elif type_==OAG_NetIface.Type.VLAN:
+                    clone.vlanhost = iface[-1]
+                    clone.db.update()
+
+        return clone
 
 ####### Exportable friendly names go here
 
 Host = OAG_Host
+Netif = OAG_NetIface
 Domain = OAG_Domain
 Site = OAG_Site
 
