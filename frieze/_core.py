@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Netif', 'set_domain',]
+__all__ = ['Domain', 'Site', 'Host', 'Netif', 'HostTemplate', 'set_domain',]
 
 import enum
 
@@ -57,21 +57,25 @@ class OAG_Site(OAG_RootNode):
         'shortname' : [ 'text',     str(), None ],
     }
 
-    def add_host(self, **hostprms):
+    def add_host(self, template, name, role):
         try:
-            site = OAG_Host((self, hostprms['name']), 'by_name')
+            host = OAG_Host((self, name), 'by_name')
         except OAGraphRetrieveError:
-            site =\
+            host =\
                 OAG_Host().db.create({
                     'site' : self,
-                    'cpus' : hostprms['cpus'],
-                    'memory' : hostprms['memory'],
-                    'bandwidth' : hostprms['bandwidth'],
-                    'provider' : hostprms['provider'].value,
-                    'name' : hostprms['name'],
-                    'role' : hostprms['role'].value,
+                    'cpus' : template.cpus,
+                    'memory' : template.memory,
+                    'bandwidth' : template.bandwidth,
+                    'provider' : template.provider.value,
+                    'name' : name,
+                    'role' : role.value,
                 })
-        return site
+
+            for iface in template.interfaces:
+                host.add_iface(iface)
+
+        return host
 
 class OAG_NetIface(OAG_RootNode):
     class Type(enum.Enum):
@@ -119,7 +123,6 @@ class OAG_NetIface(OAG_RootNode):
             return self.net_iface_bridge
         else:
             OAError("Non-bridge interfaces can't have bridge members")
-
 
 class OAG_Host(OAG_RootNode):
     class Provider(enum.Enum):
@@ -182,6 +185,14 @@ class OAG_Host(OAG_RootNode):
                     clone.db.update()
 
         return clone
+
+class HostTemplate(object):
+    def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, interfaces=[]):
+        self.cpus = cpus
+        self.memory = memory
+        self.bandwidth = bandwidth
+        self.provider = provider
+        self.interfaces = interfaces
 
 ####### Exportable friendly names go here
 
