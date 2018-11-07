@@ -77,6 +77,14 @@ class OAG_Site(OAG_RootNode):
 
         return host
 
+    @property
+    def sitebastion(self):
+        sitebastions = self.clone()[-1].host.rdf.filter(lambda x: (OAG_Host.Role(x.role)==OAG_Host.Role.SITEBASTION))
+        if sitebastions.size==1:
+            return sitebastions
+        else:
+            raise OAError("No sitebastions defined for site yet")
+
 class OAG_NetIface(OAG_RootNode):
     class Type(enum.Enum):
         PHYSICAL    = 1
