@@ -72,8 +72,15 @@ class OAG_Site(OAG_RootNode):
                     'role' : role.value,
                 })
 
-            for iface in template.interfaces:
-                host.add_iface(iface)
+            for i, iface in enumerate(template.interfaces):
+                if i==0:
+                    # Handle potential external interface
+                    if OAG_Host.Role(host.role)==OAG_Host.Role.SITEBASTION:
+                        host.add_iface(iface, OAG_NetIface.RoutingStyle.DHCP)
+                    else:
+                        host.add_iface(iface, OAG_NetIface.RoutingStyle.STATIC if self.bastion else OAG_NetIface.RoutingStyle.DHCP)
+                else:
+                    host.add_iface(iface, OAG_NetIface.RoutingStyle.STATIC)
 
         return host
 
@@ -83,7 +90,7 @@ class OAG_Site(OAG_RootNode):
         if sitebastions.size==1:
             return sitebastions
         else:
-            raise OAError("No sitebastions defined for site yet")
+            return None
 
 class OAG_NetIface(OAG_RootNode):
     class Type(enum.Enum):
@@ -93,8 +100,8 @@ class OAG_NetIface(OAG_RootNode):
         VLAN        = 4
         BRIDGE      = 5
 
-    class IPstyle(enum.Enum):
-        DCHP   = 1
+    class RoutingStyle(enum.Enum):
+        DHCP   = 1
         STATIC = 2
 
     @staticproperty
@@ -111,6 +118,7 @@ class OAG_NetIface(OAG_RootNode):
         'name'      : [ 'text',       True,  None ],
         'type'      : [ 'int',        False, None ],
         'mac'       : [ 'text',       False, None ],
+        'routing'   : [ 'int',        False, None ],
         'wireless'  : [ 'boolean',    True,  None ],
         # Interface is part of a bridge
         'bridge'    : [ OAG_NetIface, False, None ],
@@ -167,7 +175,7 @@ class OAG_Host(OAG_RootNode):
     def fqdn(self):
         return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
 
-    def add_iface(self, name, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
+    def add_iface(self, name, routing, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
         try:
             iface = OAG_NetIface((self, name), 'by_name')
         except OAGraphRetrieveError:
@@ -177,6 +185,7 @@ class OAG_Host(OAG_RootNode):
                     'name'     : name,
                     'type'     : type_.value,
                     'mac'      : mac,
+                    'routing'  : routing.value,
                     'wireless' : wireless,
                 })
         return iface
