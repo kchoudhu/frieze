@@ -78,7 +78,7 @@ class OAG_Site(OAG_RootNode):
         return host
 
     @property
-    def sitebastion(self):
+    def bastion(self):
         sitebastions = self.clone()[-1].host.rdf.filter(lambda x: (OAG_Host.Role(x.role)==OAG_Host.Role.SITEBASTION))
         if sitebastions.size==1:
             return sitebastions
