@@ -12,10 +12,10 @@ from openarc.exception import OAGraphRetrieveError, OAError
 ####### Database structures, be nice
 
 class OAG_Domain(OAG_RootNode):
-    @property
+    @staticproperty
     def is_unique(cls): return True
 
-    @property
+    @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
@@ -42,7 +42,7 @@ class OAG_Domain(OAG_RootNode):
         return site
 
 class OAG_Site(OAG_RootNode):
-    @property
+    @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
