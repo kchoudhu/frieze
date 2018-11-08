@@ -61,6 +61,18 @@ class OAG_Site(OAG_RootNode):
         try:
             host = OAG_Host((self, name), 'by_name')
         except OAGraphRetrieveError:
+
+            # If new host is a sitebastion, every other host in the site must be
+            # converted to be internal DHCP/external static.
+            if role==OAG_Host.Role.SITEBASTION:
+                for host in self.host:
+                    for i, iface in enumerate(host.net_iface):
+                        if i==0:
+                            iface.routing = OAG_NetIface.RoutingStyle.STATIC.value
+                        else:
+                            iface.routing = OAG_NetIface.RoutingStyle.DHCP.value
+                        iface.db.update()
+
             host =\
                 OAG_Host().db.create({
                     'site' : self,
@@ -75,7 +87,7 @@ class OAG_Site(OAG_RootNode):
             for i, iface in enumerate(template.interfaces):
                 if i==0:
                     # Handle potential external interface
-                    if OAG_Host.Role(host.role)==OAG_Host.Role.SITEBASTION:
+                    if role==OAG_Host.Role.SITEBASTION:
                         host.add_iface(iface, OAG_NetIface.RoutingStyle.DHCP)
                     else:
                         host.add_iface(iface, OAG_NetIface.RoutingStyle.STATIC if self.bastion else OAG_NetIface.RoutingStyle.DHCP)
