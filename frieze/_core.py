@@ -62,17 +62,6 @@ class OAG_Site(OAG_RootNode):
             host = OAG_Host((self, name), 'by_name')
         except OAGraphRetrieveError:
 
-            # If new host is a sitebastion, every other host in the site must be
-            # converted to be internal DHCP/external static.
-            if role==OAG_Host.Role.SITEBASTION:
-                for host in self.host:
-                    for i, iface in enumerate(host.net_iface):
-                        if i==0:
-                            iface.routing = OAG_NetIface.RoutingStyle.STATIC.value
-                        else:
-                            iface.routing = OAG_NetIface.RoutingStyle.DHCP.value
-                        iface.db.update()
-
             host =\
                 OAG_Host().db.create({
                     'site' : self,
@@ -84,15 +73,11 @@ class OAG_Site(OAG_RootNode):
                     'role' : role.value,
                 })
 
-            for i, iface in enumerate(template.interfaces):
-                if i==0:
-                    # Handle potential external interface
-                    if role==OAG_Host.Role.SITEBASTION:
-                        host.add_iface(iface, OAG_NetIface.RoutingStyle.DHCP)
-                    else:
-                        host.add_iface(iface, OAG_NetIface.RoutingStyle.STATIC if self.bastion else OAG_NetIface.RoutingStyle.DHCP)
+            for iface in template.interfaces:
+                if iface[1]:
+                    host.add_iface(iface[0], is_external=True)
                 else:
-                    host.add_iface(iface, OAG_NetIface.RoutingStyle.STATIC)
+                    host.add_iface(iface[0])
 
         return host
 
@@ -126,17 +111,37 @@ class OAG_NetIface(OAG_RootNode):
 
     @staticproperty
     def streams(cls): return {
-        'host'      : [ OAG_Host,     True,  None ],
-        'name'      : [ 'text',       True,  None ],
-        'type'      : [ 'int',        False, None ],
-        'mac'       : [ 'text',       False, None ],
-        'routing'   : [ 'int',        False, None ],
-        'wireless'  : [ 'boolean',    True,  None ],
+        'host'        : [ OAG_Host,     True,  None ],
+        'name'        : [ 'text',       True,  None ],
+        'type'        : [ 'int',        False, None ],
+        'mac'         : [ 'text',       False, None ],
+        # Is connected to the internet
+        'is_external' : [ 'boolean',    False, None ],
+        'wireless'    : [ 'boolean',    True,  None ],
         # Interface is part of a bridge
-        'bridge'    : [ OAG_NetIface, False, None ],
+        'bridge'      : [ OAG_NetIface, False, None ],
         # Interface is a vlan cloned off vlanhost
-        'vlanhost'  : [ OAG_NetIface, False, None ]
+        'vlanhost'    : [ OAG_NetIface, False, None ]
     }
+
+    @property
+    def routingstyle(self):
+        if self.host.site.bastion:
+            if OAG_Host.Role(self.host.role)==OAG_Host.Role.SITEBASTION:
+                if self.is_external:
+                    return self.RoutingStyle.DHCP
+                else:
+                    return self.RoutingStyle.STATIC
+            else:
+                if self.is_external:
+                    return self.RoutingStyle.STATIC
+                else:
+                    return self.RoutingStyle.DHCP
+        else:
+            if self.is_external:
+                return self.RoutingStyle.DHCP
+            else:
+                return self.RoutingStyle.STATIC
 
     @oagprop
     def vlans(self, **kwargs):
@@ -187,18 +192,18 @@ class OAG_Host(OAG_RootNode):
     def fqdn(self):
         return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
 
-    def add_iface(self, name, routing, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
+    def add_iface(self, name, is_external=False, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
         try:
             iface = OAG_NetIface((self, name), 'by_name')
         except OAGraphRetrieveError:
             iface =\
                 OAG_NetIface().db.create({
-                    'host'     : self,
-                    'name'     : name,
-                    'type'     : type_.value,
-                    'mac'      : mac,
-                    'routing'  : routing.value,
-                    'wireless' : wireless,
+                    'host'        : self,
+                    'name'        : name,
+                    'type'        : type_.value,
+                    'mac'         : mac,
+                    'is_external' : is_external,
+                    'wireless'    : wireless,
                 })
         return iface
 
