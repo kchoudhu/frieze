@@ -83,7 +83,7 @@ class OAG_Site(OAG_RootNode):
 
     @property
     def bastion(self):
-        sitebastions = self.clone()[-1].host.rdf.filter(lambda x: (OAG_Host.Role(x.role)==OAG_Host.Role.SITEBASTION))
+        sitebastions = self.clone()[-1].host.rdf.filter(lambda x: x.is_bastion)
         if sitebastions.size==1:
             return sitebastions
         else:
@@ -125,9 +125,17 @@ class OAG_NetIface(OAG_RootNode):
     }
 
     @property
+    def bird_enabled(self):
+        return not self.is_external
+
+    @property
+    def dhcpd_enabled(self):
+        return self.host.is_bastion and not self.is_external
+
+    @property
     def routingstyle(self):
         if self.host.site.bastion:
-            if OAG_Host.Role(self.host.role)==OAG_Host.Role.SITEBASTION:
+            if self.host.is_bastion:
                 if self.is_external:
                     return self.RoutingStyle.DHCP
                 else:
@@ -219,6 +227,10 @@ class OAG_Host(OAG_RootNode):
                     clone.db.update()
 
         return clone
+
+    @oagprop
+    def is_bastion(self, **kwargs):
+        return OAG_Host.Role(self.role)==OAG_Host.Role.SITEBASTION
 
 class HostTemplate(object):
     def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, interfaces=[]):
