@@ -3,6 +3,7 @@
 __all__ = ['Domain', 'Site', 'Host', 'Netif', 'HostTemplate', 'set_domain',]
 
 import enum
+import ipaddress
 
 from openarc import staticproperty, oagprop
 from openarc.dao import OADbTransaction
@@ -40,6 +41,34 @@ class OAG_Domain(OAG_RootNode):
                 })
 
         return site
+
+    def assign_subnet(self, type_, iface=None):
+        # Save a subnet for administration
+        if type_==OAG_Subnet.Type.ROUTING:
+            sid = '172.16.0.0'
+        else:
+            site_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.SITE)
+
+            if site_subnets.size==0:
+                sid = '172.16.1.0'
+            else:
+                sid = '172.16.%d.0' % (int(site_subnets[-1].sid.split('.')[-2])+1)
+
+        self.db.search()
+
+        return\
+            OAG_Subnet().db.create({
+                'domain'        : self,
+                'sid'           : sid,
+                'mask'          : 24,
+                'type'          : type_.value,
+                'control_iface' : iface,
+            })
+
+    @property
+    def routing_subnet(self):
+        """Used to route traffic between sites"""
+        return ipaddress.ip_network("172.16.0.0/24")
 
 class OAG_Site(OAG_RootNode):
     @staticproperty
@@ -165,6 +194,34 @@ class OAG_NetIface(OAG_RootNode):
         else:
             OAError("Non-bridge interfaces can't have bridge members")
 
+class OAG_Subnet(OAG_RootNode):
+    """Subnets are doled out on a per-domain basis and then assigned to
+    assigned to a site."""
+    class Type(enum.Enum):
+        ROUTING = 1
+        SITE    = 2
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+    }
+
+    @staticproperty
+    def streams(cls): return {
+        'domain'        : [ OAG_Domain,   True,  None ],
+        'sid'           : [ 'text',       str(), None ],
+        'mask'          : [ 'int',        int(), None ],
+        # what is this subnet used for?
+        'type'          : [ 'int',        int(), None ],
+        'control_iface' : [ OAG_NetIface, False, None ]
+    }
+
+    @property
+    def cidr(self):
+        return "%s/%d" % (self.sid, self.mask)
+
 class OAG_Host(OAG_RootNode):
     class Provider(enum.Enum):
         DIGITALOCEAN = 1
@@ -213,6 +270,10 @@ class OAG_Host(OAG_RootNode):
                     'is_external' : is_external,
                     'wireless'    : wireless,
                 })
+
+            if self.is_bastion and not iface.is_external and type_==OAG_NetIface.Type.PHYSICAL:
+                self.site.domain.assign_subnet(OAG_Subnet.Type.SITE, iface=iface)
+
         return iface
 
     def add_clone_iface(self, name, type_, bridge_components):
@@ -257,5 +318,7 @@ def set_domain(domain):
             OAG_Domain().db.create({
                 'domain' : domain
             })
+
+        domain.assign_subnet(OAG_Subnet.Type.ROUTING)
 
     return domain
