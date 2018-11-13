@@ -45,14 +45,14 @@ class OAG_Domain(OAG_RootNode):
     def assign_subnet(self, type_, iface=None):
         # Save a subnet for administration
         if type_==OAG_Subnet.Type.ROUTING:
-            sid = '172.16.0.0'
+            sid = '172.16.0'
         else:
             site_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.SITE)
 
             if site_subnets.size==0:
-                sid = '172.16.1.0'
+                sid = '172.16.1'
             else:
-                sid = '172.16.%d.0' % (int(site_subnets[-1].sid.split('.')[-2])+1)
+                sid = '172.16.%d' % (int(site_subnets[-1].sid.split('.')[-1])+1)
 
         self.db.search()
 
@@ -62,7 +62,8 @@ class OAG_Domain(OAG_RootNode):
                 'sid'           : sid,
                 'mask'          : 24,
                 'type'          : type_.value,
-                'control_iface' : iface,
+                'router'        : iface.host if iface else None,
+                'routing_iface' : iface,
             })
 
     @property
@@ -118,6 +119,14 @@ class OAG_Site(OAG_RootNode):
         else:
             return None
 
+    @property
+    def compute_hosts(self):
+        compute_hosts = self.clone()[-1].host.rdf.filter(lambda x: not x.is_bastion)
+        if compute_hosts.size>0:
+            return compute_hosts
+        else:
+            return None
+
 class OAG_NetIface(OAG_RootNode):
     class Type(enum.Enum):
         PHYSICAL    = 1
@@ -150,16 +159,33 @@ class OAG_NetIface(OAG_RootNode):
         # Interface is part of a bridge
         'bridge'      : [ OAG_NetIface, False, None ],
         # Interface is a vlan cloned off vlanhost
-        'vlanhost'    : [ OAG_NetIface, False, None ]
+        'vlanhost'    : [ OAG_NetIface, False, None ],
+        # Interface which routes traffic from this iface
+        'routed_by'   : [ OAG_NetIface, False, None ],
     }
 
     @property
     def bird_enabled(self):
         return not self.is_external
 
+    @oagprop
+    def bridge_members(self, **kwargs):
+        if self.type==self.Type.BRIDGE.value:
+            return self.net_iface_bridge
+        else:
+            OAError("Non-bridge interfaces can't have bridge members")
+
+    @property
+    def broadcast(self):
+        return self.routed_by.subnet[-1].broadcast if self.routed_by else None
+
     @property
     def dhcpd_enabled(self):
         return self.host.is_bastion and not self.is_external
+
+    @property
+    def gateway(self):
+        return self.routed_by.subnet[-1].gateway if self.routed_by else None
 
     @property
     def routingstyle(self):
@@ -187,13 +213,6 @@ class OAG_NetIface(OAG_RootNode):
         else:
             OAError("Non-physical interfaces can't clone vlans")
 
-    @oagprop
-    def bridge_members(self, **kwargs):
-        if self.type==self.Type.BRIDGE.value:
-            return self.net_iface_bridge
-        else:
-            OAError("Non-bridge interfaces can't have bridge members")
-
 class OAG_Subnet(OAG_RootNode):
     """Subnets are doled out on a per-domain basis and then assigned to
     assigned to a site."""
@@ -215,12 +234,21 @@ class OAG_Subnet(OAG_RootNode):
         'mask'          : [ 'int',        int(), None ],
         # what is this subnet used for?
         'type'          : [ 'int',        int(), None ],
-        'control_iface' : [ OAG_NetIface, False, None ]
+        'router'        : [ OAG_Host,     False, None ],
+        'routing_iface' : [ OAG_NetIface, False, None ]
     }
 
     @property
+    def broadcast(self):
+        return "%s.255" % self.sid
+
+    @property
     def cidr(self):
-        return "%s/%d" % (self.sid, self.mask)
+        return "%s.0/%d" % (self.sid, self.mask)
+
+    @property
+    def gateway(self):
+        return "%s.1"  % self.sid
 
 class OAG_Host(OAG_RootNode):
     class Provider(enum.Enum):
@@ -257,6 +285,19 @@ class OAG_Host(OAG_RootNode):
     def fqdn(self):
         return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
 
+    def add_clone_iface(self, name, type_, bridge_components):
+        with OADbTransaction("Bridge creation"):
+            clone = self.add_iface(name, type_=type_)
+            for iface in bridge_components:
+                if type_==OAG_NetIface.Type.BRIDGE:
+                    iface.bridge = clone
+                    iface.db.update()
+                elif type_==OAG_NetIface.Type.VLAN:
+                    clone.vlanhost = iface[-1]
+                    clone.db.update()
+
+        return clone
+
     def add_iface(self, name, is_external=False, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
         try:
             iface = OAG_NetIface((self, name), 'by_name')
@@ -271,27 +312,44 @@ class OAG_Host(OAG_RootNode):
                     'wireless'    : wireless,
                 })
 
-            if self.is_bastion and not iface.is_external and type_==OAG_NetIface.Type.PHYSICAL:
-                self.site.domain.assign_subnet(OAG_Subnet.Type.SITE, iface=iface)
+            if not iface.is_external and type_==OAG_NetIface.Type.PHYSICAL:
+                if self.is_bastion:
+                    self.site.domain.assign_subnet(OAG_Subnet.Type.SITE, iface=iface)
+                else:
+                    # Add internal routing
+                    if self.site.bastion:
+                        # We're going to use crude techniques to reroute traffic for
+                        # internial interfaces on compute hosts in sites with a bastion:
+                        #
+                        # The nth internal interface on a compute host is routed by
+                        # the nth subnet on the sitebastion.
+                        #
+                        # If the nth subnet is not available on the sitebastion, this
+                        # interface is to be left unrouted.
+                        for host in self.site.compute_hosts:
+                            for i, int_iface in enumerate(host.internal_ifaces):
+                                try:
+                                    int_iface.routed_by = self.site.bastion.routed_subnets[i].routing_iface
+                                    int_iface.db.update()
+                                except IndexError:
+                                    pass
+                    else:
+                        # Whatever, there is no internal routing for this setup yet
+                        pass
 
         return iface
 
-    def add_clone_iface(self, name, type_, bridge_components):
-        with OADbTransaction("Bridge creation"):
-            clone = self.add_iface(name, type_=type_)
-            for iface in bridge_components:
-                if type_==OAG_NetIface.Type.BRIDGE:
-                    iface.bridge = clone
-                    iface.db.update()
-                elif type_==OAG_NetIface.Type.VLAN:
-                    clone.vlanhost = iface[-1]
-                    clone.db.update()
+    @property
+    def internal_ifaces(self):
+        return self.net_iface.clone().rdf.filter(lambda x: x.is_external is False)
 
-        return clone
-
-    @oagprop
-    def is_bastion(self, **kwargs):
+    @property
+    def is_bastion(self):
         return OAG_Host.Role(self.role)==OAG_Host.Role.SITEBASTION
+
+    @property
+    def routed_subnets(self):
+        return self.subnet.clone()
 
 class HostTemplate(object):
     def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, interfaces=[]):
