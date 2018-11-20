@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Netif', 'HostTemplate', 'set_domain',]
+__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain',]
 
 import enum
 import ipaddress
@@ -29,6 +29,24 @@ class OAG_Domain(OAG_RootNode):
         'domain' : [ 'text',     str(), None ],
     }
 
+    def add_deployment(self, name, affinity=None):
+        try:
+            depl = OAG_Deployment((self, name), 'by_name')
+        except OAGraphRetrieveError:
+            # Assign it a
+            depl =\
+                OAG_Deployment().db.create({
+                    'domain'    : self,
+                    'affinity'  : affinity,
+                    'name'      : name
+                })
+
+            for site in self.site:
+                for host in site.host:
+                    host.add_iface('vlan%d' % depl.id, type_=OAG_NetIface.Type.VLAN)
+
+        return depl
+
     def add_site(self, sitename, shortname):
         try:
             site = OAG_Site((self, sitename), 'by_name')
@@ -46,13 +64,20 @@ class OAG_Domain(OAG_RootNode):
         # Save a subnet for administration
         if type_==OAG_Subnet.Type.ROUTING:
             sid = '172.16.0'
-        else:
+        elif type_==OAG_Subnet.Type.SITE:
             site_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.SITE)
 
             if site_subnets.size==0:
                 sid = '172.16.1'
             else:
                 sid = '172.16.%d' % (int(site_subnets[-1].sid.split('.')[-1])+1)
+        else:
+            depl_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.DEPLOYMENT)
+
+            if depl_subnets.size==0:
+                sid = '10.0.0'
+            else:
+                sid = '10.0.%d' % (int(depl_subnets[-1].sid.split('.')[-1])+1)
 
         self.db.search()
 
@@ -86,6 +111,12 @@ class OAG_Site(OAG_RootNode):
         'name'      : [ 'text',     str(), None ],
         'shortname' : [ 'text',     str(), None ],
     }
+
+    def add_application(self, template, stripes):
+        if isinstance(template, AppTemplate):
+            import pdb; pdb.set_trace()
+        else:
+            raise OAError("AppGroups not yet supported")
 
     def add_host(self, template, name, role):
         try:
@@ -175,9 +206,22 @@ class OAG_NetIface(OAG_RootNode):
         else:
             OAError("Non-bridge interfaces can't have bridge members")
 
+    def __get_subnet(self):
+        if self.routed_by:
+            return self.routed_by.subnet[-1]
+
+        if self.routingstyle==self.RoutingStyle.STATIC:
+            try:
+                return self.subnet[-1]
+            except TypeError:
+                pass
+
+        return None
+
     @property
     def broadcast(self):
-        return self.routed_by.subnet[-1].broadcast if self.routed_by else None
+        subnet = self.__get_subnet()
+        return subnet.broadcast if subnet else None
 
     @property
     def dhcpd_enabled(self):
@@ -185,7 +229,21 @@ class OAG_NetIface(OAG_RootNode):
 
     @property
     def gateway(self):
-        return self.routed_by.subnet[-1].gateway if self.routed_by else None
+        subnet = self.__get_subnet()
+        return subnet.gateway if subnet else None
+
+    @property
+    def ip4(self):
+        subnet = self.__get_subnet()
+
+        if not self.is_external and self.routingstyle==OAG_NetIface.RoutingStyle.STATIC:
+            return subnet.gateway if subnet else None
+
+        return None
+
+    @property
+    def is_gateway(self):
+        return self.gateway is None
 
     @property
     def routingstyle(self):
@@ -199,7 +257,10 @@ class OAG_NetIface(OAG_RootNode):
                 if self.is_external:
                     return self.RoutingStyle.STATIC
                 else:
-                    return self.RoutingStyle.DHCP
+                    if OAG_NetIface.Type(self.type)==OAG_NetIface.Type.PHYSICAL:
+                        return self.RoutingStyle.DHCP
+                    else:
+                        return self.RoutingStyle.STATIC
         else:
             if self.is_external:
                 return self.RoutingStyle.DHCP
@@ -217,8 +278,9 @@ class OAG_Subnet(OAG_RootNode):
     """Subnets are doled out on a per-domain basis and then assigned to
     assigned to a site."""
     class Type(enum.Enum):
-        ROUTING = 1
-        SITE    = 2
+        ROUTING    = 1
+        SITE       = 2
+        DEPLOYMENT = 3
 
     @staticproperty
     def context(cls): return "frieze"
@@ -312,6 +374,14 @@ class OAG_Host(OAG_RootNode):
                     'wireless'    : wireless,
                 })
 
+            if type_==OAG_NetIface.Type.VLAN:
+                # Assign vlan to internal interface
+                iface.vlanhost = self.internal_ifaces[0]
+                iface.db.update()
+
+                # Assign subnet to interface
+                self.site.domain.assign_subnet(OAG_Subnet.Type.DEPLOYMENT, iface=iface)
+
             if not iface.is_external and type_==OAG_NetIface.Type.PHYSICAL:
                 if self.is_bastion:
                     self.site.domain.assign_subnet(OAG_Subnet.Type.SITE, iface=iface)
@@ -351,6 +421,24 @@ class OAG_Host(OAG_RootNode):
     def routed_subnets(self):
         return self.subnet.clone()
 
+class OAG_Deployment(OAG_RootNode):
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+        'name' : [ ['domain', 'name'], True, None ],
+    }
+
+    @staticproperty
+    def streams(cls): return {
+        'domain'   : [ OAG_Domain, True,  None ],
+        # Applications will be housed here by preference, on other sites in
+        # domain if nessary
+        'affinity' : [ OAG_Site,   False, None ],
+        'name'     : [ 'text',     True,  None ],
+    }
+
 class HostTemplate(object):
     def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, interfaces=[]):
         self.cpus = cpus
@@ -359,12 +447,29 @@ class HostTemplate(object):
         self.provider = provider
         self.interfaces = interfaces
 
+class AppTemplate(object):
+    """An application is a composite of its name, resource requirements, mounts,
+    network capabilities and internal configurations"""
+    def __init__(self, name, cores=None, memory=None, mounts=[], ports=[], config=[]):
+        self.name = name
+        # Resource expectations. Cores and memory set to None mean
+        # that the application can go anywhere.
+        self.cores  = cores
+        self.memory = memory
+        # Mounts to be fed into the application's container
+        self.mounts = mounts
+        # Ports to be redirected from outside
+        self.ports = ports
+        # Config files that need to be set in the container
+        self.config = config
+
 ####### Exportable friendly names go here
 
 Host = OAG_Host
 Netif = OAG_NetIface
 Domain = OAG_Domain
 Site = OAG_Site
+Deployment = OAG_Deployment
 
 ####### User api goes here
 
