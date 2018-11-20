@@ -224,6 +224,10 @@ class OAG_NetIface(OAG_RootNode):
         return subnet.broadcast if subnet else None
 
     @property
+    def connected_ifaces(self):
+        return {nif.infname:'%s.%d' % (self.subnet[-1].sid, i+2) for i, nif in enumerate(self.net_iface_routed_by)}
+
+    @property
     def dhcpd_enabled(self):
         return self.host.is_bastion and not self.is_external
 
@@ -234,12 +238,23 @@ class OAG_NetIface(OAG_RootNode):
 
     @property
     def ip4(self):
-        subnet = self.__get_subnet()
 
-        if not self.is_external and self.routingstyle==OAG_NetIface.RoutingStyle.STATIC:
-            return subnet.gateway if subnet else None
 
-        return None
+        ret = None
+
+        if not self.is_external:
+
+
+            if self.routingstyle==OAG_NetIface.RoutingStyle.STATIC:
+                # IP address is whatever subnet is attached to this interface
+                subnet = self.__get_subnet()
+                ret = subnet.gateway if subnet else None
+            else:
+                # IP address is determined by alphasort on
+                if self.routed_by:
+                    ret = self.routed_by.connected_ifaces[self.infname]
+
+        return ret
 
     @property
     def is_gateway(self):
