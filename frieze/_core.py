@@ -5,6 +5,8 @@ __all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'App
 import enum
 import ipaddress
 
+from pprint import pprint
+
 from openarc import staticproperty, oagprop
 from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
@@ -29,6 +31,87 @@ class OAG_Domain(OAG_RootNode):
         'domain' : [ 'text',     str(), None ],
     }
 
+    @oagprop
+    def containers(self, **kwargs):
+        """Global view of jobs. Can be filtered by OAG_Deployment or OAG_Site
+        to determine what the distribution of containers"""
+
+        # Create resource map
+        resources = {}
+        for site in self.site:
+            try:
+                resources[site.shortname]
+            except KeyError:
+                resources[site.shortname] = {}
+
+            for host in site.compute_hosts:
+                try:
+                    resources[site.shortname][host.fqdn]
+                except KeyError:
+                    resources[site.shortname][host.fqdn] = host.slot_factor
+
+
+        # Containers are placed deployment first, site second. Affinity free
+        # definitions are placed wherever there is room. If resources are not
+        # available, they are not entered in the app mapping
+        containers = {}
+        unplaceable_apps = []
+        for depl in self.deployment:
+
+
+            if depl.application:
+                # Place site specific applications first
+                apps_with_affinity = depl.application.clone().rdf.filter(lambda x: x.affinity is not None)
+                for app in apps_with_affinity:
+                    site_slot_factor = sum([slot_factor for host, slot_factor in resources[app.affinity.shortname].items()])
+                    if site_slot_factor<app.slot_factor:
+                        unplaceable_apps.append((app.affinity.id, app.fqdn))
+                        continue
+
+                    for host, host_slot_factor in resources[app.affinity.shortname].items():
+                        if host_slot_factor-app.slot_factor>=0:
+                            resources[app.affinity.shortname][host] -= app.slot_factor
+                            # host_slot_factor -= app.slot_factor
+                            containers[app.fqdn] = {
+                                'app' : app.clone(),
+                                'site' : app.affinity.shortname,
+                                'host' : host
+                            }
+                            break
+
+                # Distribute affinity-free resources next
+                apps_without_affinity = depl.application.clone().rdf.filter(lambda x: x.affinity is None)
+                for app in apps_without_affinity:
+                    site_loop_break = False
+
+                    domain_slot_factor = 0
+                    for site, hostinfo in resources.items():
+                        domain_slot_factor += sum([host_slot_factor for host, host_slot_factor in hostinfo.items()])
+                    if domain_slot_factor<app.slot_factor:
+                        unplaceable_apps.append(('no-affinity', app.fqdn))
+                        continue
+
+                    for site, hostinfo in resources.items():
+                        if site_loop_break:
+                            break
+                        for host, host_slot_factor in hostinfo.items():
+                            if host_slot_factor-app.slot_factor>=0:
+                                resources[site][host] -= app.slot_factor
+                                # host_slot_factor -= app.slot_factor
+                                containers[app.fqdn] = {
+                                    'app' : app.clone(),
+                                    'site' : site,
+                                    'host' : host
+                                }
+                                site_loop_break = True
+                                break
+
+        if len(unplaceable_apps)>0:
+            print("Warning: unable to place the following apps:")
+            pprint(unplaceable_apps)
+
+        return containers
+
     def add_deployment(self, name, affinity=None):
         try:
             depl = OAG_Deployment((self, name), 'by_name')
@@ -37,7 +120,6 @@ class OAG_Domain(OAG_RootNode):
             depl =\
                 OAG_Deployment().db.create({
                     'domain'    : self,
-                    'affinity'  : affinity,
                     'name'      : name
                 })
 
@@ -112,12 +194,6 @@ class OAG_Site(OAG_RootNode):
         'shortname' : [ 'text',     str(), None ],
     }
 
-    def add_application(self, template, stripes):
-        if isinstance(template, AppTemplate):
-            import pdb; pdb.set_trace()
-        else:
-            raise OAError("AppGroups not yet supported")
-
     def add_host(self, template, name, role):
         try:
             host = OAG_Host((self, name), 'by_name')
@@ -152,11 +228,15 @@ class OAG_Site(OAG_RootNode):
 
     @property
     def compute_hosts(self):
-        compute_hosts = self.clone()[-1].host.rdf.filter(lambda x: not x.is_bastion)
+        compute_hosts = self.host.clone().rdf.filter(lambda x: not x.is_bastion)
         if compute_hosts.size>0:
             return compute_hosts
         else:
             return None
+
+    @property
+    def containers(self):
+        return { container:container_info for container, container_info in self.domain.containers.items() if container_info['site']==self.shortname }
 
 class OAG_NetIface(OAG_RootNode):
     class Type(enum.Enum):
@@ -359,6 +439,10 @@ class OAG_Host(OAG_RootNode):
     }
 
     @property
+    def containers(self):
+        return { container:container_info for container, container_info in self.site.domain.containers.items() if container_info['host']==self.fqdn }
+
+    @property
     def fqdn(self):
         return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
 
@@ -436,6 +520,39 @@ class OAG_Host(OAG_RootNode):
     def routed_subnets(self):
         return self.subnet.clone()
 
+    @property
+    def slot_factor(self):
+        return self.memory*self.cpus
+
+class OAG_Application(OAG_RootNode):
+    """An AppContainer is the running unit of work. """
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+        'name' : [ ['deployment', 'service'], False, None ],
+    }
+
+    @staticproperty
+    def streams(cls): return {
+        'deployment' : [ OAG_Deployment, True,  None ],
+        'affinity'   : [ OAG_Site,       False, None ],
+        'service'    : [ 'text',         str(), None ],
+        'stripe'     : [ 'int',          int(), None ],
+        'cores'      : [ 'int',          None,  None ],
+        'memory'     : [ 'int',          None,  None ]
+    }
+
+    @property
+    def fqdn(self):
+        return "%s%d.%s.%s" % (self.service, self.stripe, self.deployment.name, self.deployment.domain.domain)
+
+    @property
+    def slot_factor(self):
+        return self.cores if self.cores else 0.25 * self.memory if self.memory else 256
+
 class OAG_Deployment(OAG_RootNode):
     @staticproperty
     def context(cls): return "frieze"
@@ -448,11 +565,42 @@ class OAG_Deployment(OAG_RootNode):
     @staticproperty
     def streams(cls): return {
         'domain'   : [ OAG_Domain, True,  None ],
-        # Applications will be housed here by preference, on other sites in
-        # domain if nessary
-        'affinity' : [ OAG_Site,   False, None ],
         'name'     : [ 'text',     True,  None ],
     }
+
+    def add_application(self, template, affinity=None, stripes=1):
+        """ Where should we put this new application? Loop through all
+        hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
+        If template doesn't specify cores or memory required, just go ahead
+        and put it on the first host with ANY space on it"""
+        if isinstance(template, AppTemplate):
+            try:
+                app = OAG_Application((self, template.name), 'by_name')
+                stripe_base = app[-1].stripe+1
+            except OAGraphRetrieveError:
+                stripe_base = 0
+
+            for stripe in range(stripes):
+                OAG_Application().db.create({
+                    'deployment' : self,
+                    'service' : template.name,
+                    'stripe' : stripe_base+stripe,
+                    'affinity' : affinity,
+                    'cores' : template.cores,
+                    'memory' : template.memory,
+                })
+
+        else:
+            raise OAError("AppGroups not yet supported")
+        pass
+
+    @property
+    def containers(self):
+        containers = {}
+        if self.application:
+            for app in self.application:
+                containers[app.fqdn] = app.clone()
+        return containers
 
 class HostTemplate(object):
     def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, interfaces=[]):
@@ -465,10 +613,9 @@ class HostTemplate(object):
 class AppTemplate(object):
     """An application is a composite of its name, resource requirements, mounts,
     network capabilities and internal configurations"""
-    def __init__(self, name, cores=None, memory=None, mounts=[], ports=[], config=[]):
+    def __init__(self, name, cores=None, memory=None, affinity=None, mounts=[], ports=[], config=[]):
         self.name = name
-        # Resource expectations. Cores and memory set to None mean
-        # that the application can go anywhere.
+        # Resource expectations.
         self.cores  = cores
         self.memory = memory
         # Mounts to be fed into the application's container
@@ -477,6 +624,8 @@ class AppTemplate(object):
         self.ports = ports
         # Config files that need to be set in the container
         self.config = config
+        # The site in which we would like this app to be run. None for any site.
+        self.affinity = affinity
 
 ####### Exportable friendly names go here
 
