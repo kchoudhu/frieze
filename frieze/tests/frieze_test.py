@@ -170,6 +170,10 @@ class TestSubscriptions(unittest.TestCase, TestBase):
         # An application without stripes will default to initializing one stripe.
         infra_depl.add_application(msqlsd_template)
 
+        print('domain:', domain.containers.size)
+        print('site:',   site.containers.size)
+        print('host:',   host.containers.size)
+
     class SQL(TestBase.SQL):
         pass
 

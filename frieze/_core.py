@@ -44,39 +44,32 @@ class OAG_Domain(OAG_RootNode):
             except KeyError:
                 resources[site.shortname] = {}
 
-            for host in site.compute_hosts:
+            for i, host in enumerate(site.compute_hosts):
                 try:
                     resources[site.shortname][host.fqdn]
                 except KeyError:
-                    resources[site.shortname][host.fqdn] = host.slot_factor
-
+                    resources[site.shortname][host.fqdn] = host.clone()[i]
 
         # Containers are placed deployment first, site second. Affinity free
         # definitions are placed wherever there is room. If resources are not
         # available, they are not entered in the app mapping
-        containers = {}
+        containers = [['application', 'site', 'host']]
         unplaceable_apps = []
         for depl in self.deployment:
-
 
             if depl.application:
                 # Place site specific applications first
                 apps_with_affinity = depl.application.clone().rdf.filter(lambda x: x.affinity is not None)
                 for app in apps_with_affinity:
-                    site_slot_factor = sum([slot_factor for host, slot_factor in resources[app.affinity.shortname].items()])
+                    site_slot_factor = sum([host.slot_factor for hostname, host in resources[app.affinity.shortname].items()])
                     if site_slot_factor<app.slot_factor:
                         unplaceable_apps.append((app.affinity.id, app.fqdn))
                         continue
 
-                    for host, host_slot_factor in resources[app.affinity.shortname].items():
-                        if host_slot_factor-app.slot_factor>=0:
-                            resources[app.affinity.shortname][host] -= app.slot_factor
-                            # host_slot_factor -= app.slot_factor
-                            containers[app.fqdn] = {
-                                'app' : app.clone(),
-                                'site' : app.affinity.shortname,
-                                'host' : host
-                            }
+                    for hostname, host in resources[app.affinity.shortname].items():
+                        if host.slot_factor-app.slot_factor>=0:
+                            resources[app.affinity.shortname][hostname].slot_factor -= app.slot_factor
+                            containers.append([app, site, host])
                             break
 
                 # Distribute affinity-free resources next
@@ -86,7 +79,7 @@ class OAG_Domain(OAG_RootNode):
 
                     domain_slot_factor = 0
                     for site, hostinfo in resources.items():
-                        domain_slot_factor += sum([host_slot_factor for host, host_slot_factor in hostinfo.items()])
+                        domain_slot_factor += sum([host.slot_factor for hostname, host in hostinfo.items()])
                     if domain_slot_factor<app.slot_factor:
                         unplaceable_apps.append(('no-affinity', app.fqdn))
                         continue
@@ -94,15 +87,10 @@ class OAG_Domain(OAG_RootNode):
                     for site, hostinfo in resources.items():
                         if site_loop_break:
                             break
-                        for host, host_slot_factor in hostinfo.items():
-                            if host_slot_factor-app.slot_factor>=0:
-                                resources[site][host] -= app.slot_factor
-                                # host_slot_factor -= app.slot_factor
-                                containers[app.fqdn] = {
-                                    'app' : app.clone(),
-                                    'site' : site,
-                                    'host' : host
-                                }
+                        for hostname, host in hostinfo.items():
+                            if host.slot_factor-app.slot_factor>=0:
+                                resources[site][hostname].slot_factor -= app.slot_factor
+                                containers.append([app, OAG_Site((self, site), 'by_shortname')[0], host])
                                 site_loop_break = True
                                 break
 
@@ -110,7 +98,7 @@ class OAG_Domain(OAG_RootNode):
             print("Warning: unable to place the following apps:")
             pprint(unplaceable_apps)
 
-        return containers
+        return OAG_Container(initprms=containers)
 
     def add_deployment(self, name, affinity=None):
         try:
@@ -178,13 +166,32 @@ class OAG_Domain(OAG_RootNode):
         """Used to route traffic between sites"""
         return ipaddress.ip_network("172.16.0.0/24")
 
+class OAG_Container(OAG_RootNode):
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def streamable(cls): return False
+
+    @staticproperty
+    def streams(cls): return {
+        'application' : [ OAG_Application, True,  None ],
+        'site'        : [ OAG_Site,        True,  None ],
+        'host'        : [ OAG_Host,        True,  None ],
+    }
+
+    @property
+    def fqdn(self):
+        return self.application.fqdn
+
 class OAG_Site(OAG_RootNode):
     @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
     def dbindices(cls): return {
-        'name' : [ ['domain', 'name'], True, None ],
+        'name'      : [ ['domain', 'name'],      True, None ],
+        'shortname' : [ ['domain', 'shortname'], True, None ],
     }
 
     @staticproperty
@@ -236,7 +243,7 @@ class OAG_Site(OAG_RootNode):
 
     @property
     def containers(self):
-        return { container:container_info for container, container_info in self.domain.containers.items() if container_info['site']==self.shortname }
+        return self.domain.clone().containers.rdf.filter(lambda x: x.site.id==self.id)
 
 class OAG_NetIface(OAG_RootNode):
     class Type(enum.Enum):
@@ -440,7 +447,7 @@ class OAG_Host(OAG_RootNode):
 
     @property
     def containers(self):
-        return { container:container_info for container, container_info in self.site.domain.containers.items() if container_info['host']==self.fqdn }
+        return self.site.domain.clone().containers.rdf.filter(lambda x: x.host.id==self.id)
 
     @property
     def fqdn(self):
@@ -522,7 +529,16 @@ class OAG_Host(OAG_RootNode):
 
     @property
     def slot_factor(self):
-        return self.memory*self.cpus
+        try:
+            if self._slot_factor is None:
+                self._slot_factor = self.memory*self.cpus
+        except AttributeError:
+            self._slot_factor = self.memory*self.cpus
+        return self._slot_factor
+    @slot_factor.setter
+    def slot_factor(self, val):
+        self._slot_factor = val
+
 
 class OAG_Application(OAG_RootNode):
     """An AppContainer is the running unit of work. """
