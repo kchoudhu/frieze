@@ -215,6 +215,7 @@ class OAG_Site(OAG_RootNode):
                     'provider' : template.provider.value,
                     'name' : name,
                     'role' : role.value,
+                    'os' : template.os.value
                 })
 
             for iface in template.interfaces:
@@ -443,6 +444,7 @@ class OAG_Host(OAG_RootNode):
         'provider'  : [ 'int',    True, None ],
         'name'      : [ 'text',   True, None ],
         'role'      : [ 'int',    True, None ],
+        'os'        : [ 'int',    True, None ],
     }
 
     @property
@@ -618,13 +620,17 @@ class OAG_Deployment(OAG_RootNode):
                 containers[app.fqdn] = app.clone()
         return containers
 
+class HostOS(enum.Enum):
+    FreeBSD_11_2 = 1
+
 class HostTemplate(object):
-    def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, interfaces=[]):
+    def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, os=HostOS.FreeBSD_11_2, interfaces=[]):
         self.cpus = cpus
         self.memory = memory
         self.bandwidth = bandwidth
         self.provider = provider
         self.interfaces = interfaces
+        self.os = os
 
 class AppTemplate(object):
     """An application is a composite of its name, resource requirements, mounts,
