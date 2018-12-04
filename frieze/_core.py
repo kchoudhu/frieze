@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain',]
+__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain', 'HostOS', 'Tunable']
 
 import enum
 import ipaddress
@@ -11,6 +11,8 @@ from openarc import staticproperty, oagprop
 from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
+
+from ._osinfo import HostOS, Tunable
 
 ####### Database structures, be nice
 
@@ -215,14 +217,24 @@ class OAG_Site(OAG_RootNode):
                     'provider' : template.provider.value,
                     'name' : name,
                     'role' : role.value,
-                    'os' : template.os.value
+                    'os' : template.os
                 })
 
+            # Add network interfaces
             for iface in template.interfaces:
                 if iface[1]:
                     host.add_iface(iface[0], is_external=True)
                 else:
                     host.add_iface(iface[0])
+
+            # Add tunable parameters
+            for sysctl in template.sysctls:
+                OAG_Sysctls().db.create({
+                    'host' : host,
+                    'tunable' : sysctl[0],
+                    'boot' : sysctl[1],
+                    'value' : sysctl[2],
+                })
 
         return host
 
@@ -444,7 +456,7 @@ class OAG_Host(OAG_RootNode):
         'provider'  : [ 'int',    True, None ],
         'name'      : [ 'text',   True, None ],
         'role'      : [ 'int',    True, None ],
-        'os'        : [ 'int',    True, None ],
+        'os'        : [ HostOS,   True, None ],
     }
 
     @property
@@ -541,6 +553,22 @@ class OAG_Host(OAG_RootNode):
     def slot_factor(self, val):
         self._slot_factor = val
 
+class OAG_Sysctls(OAG_RootNode):
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+    }
+
+    @staticproperty
+    def streams(cls): return {
+        'host'      : [ OAG_Host,  True, None ],
+        'tunable'   : [ Tunable,   True, None ],
+        'value'     : [ 'text',    True, None ],
+        # These tunables are only set at boot time
+        'boot'      : [ 'boolean', True, None ]
+    }
 
 class OAG_Application(OAG_RootNode):
     """An AppContainer is the running unit of work. """
@@ -620,17 +648,15 @@ class OAG_Deployment(OAG_RootNode):
                 containers[app.fqdn] = app.clone()
         return containers
 
-class HostOS(enum.Enum):
-    FreeBSD_11_2 = 1
-
 class HostTemplate(object):
-    def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, os=HostOS.FreeBSD_11_2, interfaces=[]):
+    def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, sysctls=None, os=HostOS.FreeBSD_11_2, interfaces=[]):
         self.cpus = cpus
         self.memory = memory
         self.bandwidth = bandwidth
         self.provider = provider
         self.interfaces = interfaces
         self.os = os
+        self.sysctls = sysctls
 
 class AppTemplate(object):
     """An application is a composite of its name, resource requirements, mounts,

@@ -63,6 +63,11 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                     # Iface-----ext(t)/int(f)
                     ('vtnet0',  True),
                     ('vtnet1',  False),
+                ],
+                'sysctls' : [
+                    # Tunable--------------------------------boot----value
+                    (frieze.Tunable.F_HW_VTNET_CSUM_DISABLE, True,   "1"), # Do not checksum on VTNET interfaces
+                    (frieze.Tunable.F_NET_FIBS,              True,   "2")  # We need two routing tables (one for internal, one for external)
                 ]
             })
 
@@ -119,7 +124,7 @@ class TestSubscriptions(unittest.TestCase, TestBase):
         # compute host traffic through the sitebastion (i.e. the sitebastion
         # becomes the default gateway). The hosts still remain accessible through
         # internet, but ONLY via SSH, and ONLY on fib 1. Additionally, the
-        # external facing interfa
+        # external facing interface
         sitebastion = site.add_host(**{
             'template'  : host_template,
             'name'      : 'installation01',
@@ -165,7 +170,7 @@ class TestSubscriptions(unittest.TestCase, TestBase):
 
         # Application stripes without an affinity are deployed on whatever compute
         # hosts are available. If slots run out, the overflowing stripes won't run
-        infra_depl.add_application(openrelayd_template, stripes=25)
+        infra_depl.add_application(openrelayd_template, stripes=4)
 
         # An application without stripes will default to initializing one stripe.
         infra_depl.add_application(msqlsd_template)
@@ -173,6 +178,13 @@ class TestSubscriptions(unittest.TestCase, TestBase):
         print('domain:', domain.containers.size)
         print('site:',   site.containers.size)
         print('host:',   host.containers.size)
+
+        # Some exposition
+        print(host.os)
+        for tunable in host.sysctls:
+            print(tunable.tunable, tunable.value)
+
+        # domain.configure()
 
     class SQL(TestBase.SQL):
         pass
