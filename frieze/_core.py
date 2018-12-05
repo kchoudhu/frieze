@@ -71,7 +71,7 @@ class OAG_Domain(OAG_RootNode):
                     for hostname, host in resources[app.affinity.shortname].items():
                         if host.slot_factor-app.slot_factor>=0:
                             resources[app.affinity.shortname][hostname].slot_factor -= app.slot_factor
-                            containers.append([app, site, host])
+                            containers.append([app.clone(), site.clone(), host.clone()])
                             break
 
                 # Distribute affinity-free resources next
@@ -92,7 +92,7 @@ class OAG_Domain(OAG_RootNode):
                         for hostname, host in hostinfo.items():
                             if host.slot_factor-app.slot_factor>=0:
                                 resources[site][hostname].slot_factor -= app.slot_factor
-                                containers.append([app, OAG_Site((self, site), 'by_shortname')[0], host])
+                                containers.append([app.clone(), OAG_Site((self, site), 'by_shortname')[0], host.clone()])
                                 site_loop_break = True
                                 break
 
@@ -597,7 +597,7 @@ class OAG_Application(OAG_RootNode):
 
     @property
     def slot_factor(self):
-        return self.cores if self.cores else 0.25 * self.memory if self.memory else 256
+        return (self.cores if self.cores else 0.25) * (self.memory if self.memory else 256)
 
 class OAG_Deployment(OAG_RootNode):
     @staticproperty
