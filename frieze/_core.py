@@ -183,6 +183,10 @@ class OAG_Container(OAG_RootNode):
     }
 
     @property
+    def block_storage(self):
+        return self.site.block_storage.clone().rdf.filter(lambda x: x.container_name==self.fqdn)
+
+    @property
     def fqdn(self):
         return self.application.fqdn
 
@@ -257,6 +261,67 @@ class OAG_Site(OAG_RootNode):
     @property
     def containers(self):
         return self.domain.clone().containers.rdf.filter(lambda x: x.site.id==self.id)
+
+    @oagprop
+    def block_storage(self, **kwargs):
+        """Analyzes containers on site and returns an OAG_BlockStore object
+        listing block storage devices that need to be provided in order to run
+        the site"""
+        store_init = [['container_name', 'site_name', 'host_name', 'appmnt']]
+        for container in self.containers:
+            for app in container.application:
+                if app.app_required_mount:
+                    for arm in app.app_required_mount:
+                        store_init.append([container.fqdn, self.shortname, container.host.fqdn, arm.clone()])
+
+        return OAG_SysMount(initprms=store_init)
+
+class OAG_SysMount(OAG_RootNode):
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def streamable(cls): return False
+
+    @staticproperty
+    def streams(cls): return {
+        'container_name' : [ 'text', True, None ],
+        'site_name'      : [ 'text', True, None ],
+        'host_name'      : [ 'text', True, None ],
+        'appmnt'         : [ OAG_AppRequiredMount, True, None ],
+    }
+
+    @property
+    def blockstore_name(self):
+        return "%s:%s:%s" % (self.site_name, self.container_name, self.appmnt.mount)
+
+    @property
+    def dataset(self):
+        return "%s/%s" % (self.zpool, self.appmnt.mount)
+
+    @property
+    def default_mountdir(self):
+        return '/mnt'
+
+    @property
+    def mount_pount(self):
+        return "%s/%s" % (self.default_mountdir, self.dataset)
+
+    @property
+    def zpool(self):
+        return "%s%d" % (self.appmnt.app.service, self.appmnt.app.stripe)
+
+class OAG_AppRequiredMount(OAG_RootNode):
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def streams(cls): return {
+        'app'   : [ OAG_Application, True, None ],
+        'mount' : [ 'text',          True, None ]
+    }
 
 class OAG_NetIface(OAG_RootNode):
     class Type(enum.Enum):
@@ -460,6 +525,10 @@ class OAG_Host(OAG_RootNode):
     }
 
     @property
+    def block_storage(self):
+        return self.site.block_storage.clone().rdf.filter(lambda x: x.host_name==self.fqdn)
+
+    @property
     def containers(self):
         return self.site.domain.clone().containers.rdf.filter(lambda x: x.host.id==self.id)
 
@@ -626,19 +695,29 @@ class OAG_Deployment(OAG_RootNode):
             except OAGraphRetrieveError:
                 stripe_base = 0
 
-            for stripe in range(stripes):
-                OAG_Application().db.create({
-                    'deployment' : self,
-                    'service' : template.name,
-                    'stripe' : stripe_base+stripe,
-                    'affinity' : affinity,
-                    'cores' : template.cores,
-                    'memory' : template.memory,
-                })
+            with OADbTransaction("App Add"):
+                for stripe in range(stripes):
+                    app =\
+                        OAG_Application().db.create({
+                            'deployment' : self,
+                            'service' : template.name,
+                            'stripe' : stripe_base+stripe,
+                            'affinity' : affinity,
+                            'cores' : template.cores,
+                            'memory' : template.memory,
+                        })
 
+                    for mount in template.mounts:
+                        appmount =\
+                            OAG_AppRequiredMount().db.create({
+                                'app' : app,
+                                'mount' : mount
+                            })
         else:
             raise OAError("AppGroups not yet supported")
-        pass
+
+        return app
+
 
     @property
     def containers(self):

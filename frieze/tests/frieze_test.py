@@ -149,6 +149,24 @@ class TestSubscriptions(unittest.TestCase, TestBase):
         nextcloud_tempalte =\
             frieze.AppTemplate(name="nextcloud")
 
+        # Here we see an application specifying its required mounts. For every
+        # instance of this application, a block store will be mounted on the host
+        # the application's container is running on; once mounted, a zpool is
+        # created and datasets created within it.
+        #
+        # In this example, the zpool will be called postgres, and the following
+        # datasets are created:
+        #
+        # - postgres
+        # - postgres/wal
+        # - postgres/data
+        # - postgres/extra
+        #
+        # Sharing the same mount across multiple application containers is not
+        # yet supported.
+        postgres_template =\
+            frieze.AppTemplate(name="postgres", mounts=[ 'wal', 'data', 'extra' ])
+
         # Define a deployment to hold our applications, and define where it runs
         # by adding it to the site.
         #
@@ -173,18 +191,39 @@ class TestSubscriptions(unittest.TestCase, TestBase):
         infra_depl.add_application(openrelayd_template, stripes=4)
 
         # An application without stripes will default to initializing one stripe.
-        infra_depl.add_application(msqlsd_template)
+        infra_depl.add_application(postgres_template, affinity=site, stripes=2)
 
-        print('domain:', domain.containers.size)
-        print('site:',   site.containers.size)
-        print('host:',   host.containers.size)
+        print('Container Stats')
+        print(' ', 'domain:', domain.containers.size)
+        print(' ', 'site  :', site.containers.size)
+        print(' ', 'host  :', host.containers.size)
 
-        # Some exposition
-        print(host.os)
+        print('Host Tunable')
         for tunable in host.sysctls:
-            print(tunable.tunable, tunable.value)
+            print(' ', tunable.tunable, tunable.value)
 
-        # domain.configure()
+        print('Storage Stats')
+        print(' ', 'Block Devices Created')
+        for block_storage in site.block_storage:
+            print('   ', block_storage.blockstore_name)
+        print(' ', 'Host ZFS Mounts')
+        for host in site.compute_hosts:
+            zpool = str()
+            print('   ', host.fqdn)
+            for block_storage in host.block_storage:
+                if zpool != block_storage.zpool:
+                    print('     ', block_storage.zpool)
+                    zpool = block_storage.zpool
+                print('       ', block_storage.dataset, '->', block_storage.mount_pount)
+
+        print(' ', 'Container ZFS datasets')
+        for container in site.containers:
+            cur_container = str()
+            print('   ', container.fqdn)
+            for block_storage in container.block_storage:
+                if container.fqdn != cur_container:
+                    cur_container = container.fqdn
+                print('     ', block_storage.dataset)
 
     class SQL(TestBase.SQL):
         pass
