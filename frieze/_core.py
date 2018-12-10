@@ -18,19 +18,18 @@ from ._osinfo import HostOS, Tunable
 
 class OAG_Domain(OAG_RootNode):
     @staticproperty
-    def is_unique(cls): return True
-
-    @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
     def dbindices(cls): return {
-        'domain' : [ ['domain'], True,  None ],
+        'domain'          : [ ['domain'], True,  None ],
     }
 
     @staticproperty
     def streams(cls): return {
-        'domain' : [ 'text',     str(), None ],
+        'domain'       : [ 'text',    str(),  None ],
+        'version_name' : [ 'text',    None,   None ],
+        'deployed'     : [ 'boolean', bool(), None ]
     }
 
     @oagprop
@@ -260,7 +259,7 @@ class OAG_Site(OAG_RootNode):
 
     @property
     def containers(self):
-        return self.domain.clone().containers.rdf.filter(lambda x: x.site.id==self.id)
+        return self.domain.clone()[-1].containers.rdf.filter(lambda x: x.site.id==self.id)
 
     @oagprop
     def block_storage(self, **kwargs):
@@ -530,7 +529,7 @@ class OAG_Host(OAG_RootNode):
 
     @property
     def containers(self):
-        return self.site.domain.clone().containers.rdf.filter(lambda x: x.host.id==self.id)
+        return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
 
     @property
     def fqdn(self):
@@ -770,7 +769,8 @@ def set_domain(domain):
     except OAGraphRetrieveError:
         domain =\
             OAG_Domain().db.create({
-                'domain' : domain
+                'domain'   : domain,
+                'deployed' : False,
             })
 
         domain.assign_subnet(OAG_Subnet.Type.ROUTING)
