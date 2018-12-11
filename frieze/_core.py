@@ -717,7 +717,6 @@ class OAG_Deployment(OAG_RootNode):
 
         return app
 
-
     @property
     def containers(self):
         containers = {}
@@ -763,16 +762,30 @@ Deployment = OAG_Deployment
 
 ####### User api goes here
 
+p_domain = None
+
 def set_domain(domain):
-    try:
-        domain = OAG_Domain(domain, 'by_domain')
-    except OAGraphRetrieveError:
-        domain =\
-            OAG_Domain().db.create({
-                'domain'   : domain,
-                'deployed' : False,
-            })
+    global p_domain
+    gen_domain = False
 
-        domain.assign_subnet(OAG_Subnet.Type.ROUTING)
+    if p_domain:
+        if domain==p_domain:
+            return p_domain
+        else:
+            gen_domain = True
+    else:
+        gen_domain = True
 
-    return domain
+    if gen_domain:
+        try:
+            p_domain = OAG_Domain(domain, 'by_domain')
+        except OAGraphRetrieveError:
+            p_domain =\
+                OAG_Domain().db.create({
+                    'domain'   : domain,
+                    'deployed' : False,
+                })
+
+            p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
+
+    return p_domain
