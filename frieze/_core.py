@@ -2,6 +2,7 @@
 
 __all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain', 'HostOS', 'Tunable']
 
+import collections
 import enum
 import ipaddress
 
@@ -16,22 +17,179 @@ from ._osinfo import HostOS, Tunable
 
 ####### Database structures, be nice
 
-class OAG_Domain(OAG_RootNode):
+def walk_graph_to_domain(check_node):
+    if check_node.__class__ == OAG_Domain:
+        return check_node
+    else:
+        domain_found = None
+        for stream in check_node.streams:
+            if check_node.is_oagnode(stream):
+                payload = getattr(check_node, stream, None)
+                if payload:
+                    domain_found = walk_graph_to_domain(payload)
+                    if domain_found:
+                        return domain_found
+        return doamin_found
+
+class OAG_FriezeRoot(OAG_RootNode):
+    @oagprop
+    def root_domain(self, **kwargs):
+        return walk_graph_to_domain(self)
+
+def friezetxn(fn):
+
+    # The best thing since sliced bread
+    nested_dict = lambda: collections.defaultdict(nested_dict)
+
+    # A simple cloning script
+    def db_clone_with_changes(src, repl={}):
+
+        if not src:
+            return None
+
+        if clones[src.__class__][src.id]:
+            return clones[src.__class__][src.id]
+
+        # recursively descend the subnode graph to
+        initprms = {}
+        for stream in src.streams:
+            payload = getattr(src, stream, None)
+            if payload\
+                and stream not in repl\
+                and src.is_oagnode(stream):
+                    if clones[payload.__class__][payload.id]:
+                        payload = clones[payload.__class__][payload.id]
+                    else:
+                        print("cloning subnode %s[%d].%s.id -> [%d]" % (src.__class__, src.id, stream, payload.id))
+                        clone = db_clone_with_changes(payload)
+                        clones[payload.__class__][payload.id] = clone
+                        payload = clone
+            initprms[stream] = payload
+
+        initprms = {**initprms, **repl}
+        newoag = src.__class__(initprms=initprms, initschema=False).db.create()
+        clones[src.__class__][src.id] = newoag
+
+        return newoag
+
+    # Use this to stash previously cloned items
+    clones = nested_dict()
+
+    def wrapfn(self, *args, **kwargs):
+
+        if self.root_domain.is_frozen:
+
+            with OADbTransaction("Clone domain") as tran:
+
+                n_domain = db_clone_with_changes(self.root_domain, repl={'version_name' : str()})
+
+                # TODO: this can be inferred recursively from forward keys
+
+                for site in self.root_domain.site:
+                    n_site = db_clone_with_changes(site)
+                    for host in site.host:
+                        n_host = db_clone_with_changes(host)
+
+                        # Clone ifaces recursively
+                        for iface in host.net_iface:
+                            n_iface = db_clone_with_changes(iface)
+
+                        # Clone tunables
+                        for tunable in host.sysctls:
+                            n_tunable = db_clone_with_changes(tunable)
+
+                for depl in self.root_domain.deployment:
+                    n_depl = db_clone_with_changes(depl)
+                    if depl.application:
+                        for app in depl.application:
+                            n_app = db_clone_with_changes(app)
+
+                for subnet in self.root_domain.subnet:
+                    n_subnet = db_clone_with_changes(subnet)
+
+        self.root_domain.db.search()
+
+        return fn(self, *args, **kwargs)
+    return wrapfn
+
+class OAG_Domain(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
     def dbindices(cls): return {
-        'domain'          : [ ['domain'], True,  None ],
+        'domain'          : [ ['domain'], False,  None ],
     }
 
     @staticproperty
     def streams(cls): return {
         'domain'       : [ 'text',    str(),  None ],
-        'version_name' : [ 'text',    None,   None ],
+        'version_name' : [ 'text',    str(),  None ],
         'deployed'     : [ 'boolean', bool(), None ]
     }
 
+    @friezetxn
+    def add_deployment(self, name, affinity=None):
+        try:
+            depl = OAG_Deployment((self, name), 'by_name')
+        except OAGraphRetrieveError:
+            depl =\
+                OAG_Deployment().db.create({
+                    'domain'    : self,
+                    'name'      : name
+                })
+
+            for site in self.site:
+                for host in site.host:
+                    host.add_iface('vlan%d' % depl.id, type_=OAG_NetIface.Type.VLAN)
+
+        return depl
+
+    @friezetxn
+    def add_site(self, sitename, shortname):
+        try:
+            site = OAG_Site((self, sitename), 'by_name')
+        except OAGraphRetrieveError:
+            site =\
+                OAG_Site().db.create({
+                    'domain'    : self,
+                    'name'      : sitename,
+                    'shortname' : shortname
+                })
+
+        return site
+
+    @friezetxn
+    def assign_subnet(self, type_, iface=None):
+        # Save a subnet for administration
+        if type_==OAG_Subnet.Type.ROUTING:
+            sid = '172.16.0'
+        elif type_==OAG_Subnet.Type.SITE:
+            site_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.SITE)
+
+            if site_subnets.size==0:
+                sid = '172.16.1'
+            else:
+                sid = '172.16.%d' % (int(site_subnets[-1].sid.split('.')[-1])+1)
+        else:
+            depl_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.DEPLOYMENT)
+
+            if depl_subnets.size==0:
+                sid = '10.0.0'
+            else:
+                sid = '10.0.%d' % (int(depl_subnets[-1].sid.split('.')[-1])+1)
+
+        self.db.search()
+
+        return\
+            OAG_Subnet().db.create({
+                'domain'        : self,
+                'sid'           : sid,
+                'mask'          : 24,
+                'type'          : type_.value,
+                'router'        : iface.host if iface else None,
+                'routing_iface' : iface,
+            })
     @oagprop
     def containers(self, **kwargs):
         """Global view of jobs. Can be filtered by OAG_Deployment or OAG_Site
@@ -101,73 +259,23 @@ class OAG_Domain(OAG_RootNode):
 
         return OAG_Container(initprms=containers)
 
-    def add_deployment(self, name, affinity=None):
-        try:
-            depl = OAG_Deployment((self, name), 'by_name')
-        except OAGraphRetrieveError:
-            # Assign it a
-            depl =\
-                OAG_Deployment().db.create({
-                    'domain'    : self,
-                    'name'      : name
-                })
-
-            for site in self.site:
-                for host in site.host:
-                    host.add_iface('vlan%d' % depl.id, type_=OAG_NetIface.Type.VLAN)
-
-        return depl
-
-    def add_site(self, sitename, shortname):
-        try:
-            site = OAG_Site((self, sitename), 'by_name')
-        except OAGraphRetrieveError:
-            site =\
-                OAG_Site().db.create({
-                    'domain'    : self,
-                    'name'      : sitename,
-                    'shortname' : shortname
-                })
-
-        return site
-
-    def assign_subnet(self, type_, iface=None):
-        # Save a subnet for administration
-        if type_==OAG_Subnet.Type.ROUTING:
-            sid = '172.16.0'
-        elif type_==OAG_Subnet.Type.SITE:
-            site_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.SITE)
-
-            if site_subnets.size==0:
-                sid = '172.16.1'
-            else:
-                sid = '172.16.%d' % (int(site_subnets[-1].sid.split('.')[-1])+1)
-        else:
-            depl_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.DEPLOYMENT)
-
-            if depl_subnets.size==0:
-                sid = '10.0.0'
-            else:
-                sid = '10.0.%d' % (int(depl_subnets[-1].sid.split('.')[-1])+1)
-
-        self.db.search()
-
-        return\
-            OAG_Subnet().db.create({
-                'domain'        : self,
-                'sid'           : sid,
-                'mask'          : 24,
-                'type'          : type_.value,
-                'router'        : iface.host if iface else None,
-                'routing_iface' : iface,
-            })
+    def deploy(self, version_name=str()):
+        return self
 
     @property
-    def routing_subnet(self):
-        """Used to route traffic between sites"""
-        return ipaddress.ip_network("172.16.0.0/24")
+    def is_frozen(self):
+        return len(self.version_name)>0
 
-class OAG_Container(OAG_RootNode):
+    def snapshot(self, version_name):
+        if self.version_name:
+            raise OAError("This version has already been snapshot with [%s]" % self.version_name)
+
+        self.version_name = version_name
+        self.db.update()
+
+        return self
+
+class OAG_Container(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
 
@@ -189,7 +297,7 @@ class OAG_Container(OAG_RootNode):
     def fqdn(self):
         return self.application.fqdn
 
-class OAG_Site(OAG_RootNode):
+class OAG_Site(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
 
@@ -206,6 +314,7 @@ class OAG_Site(OAG_RootNode):
         'shortname' : [ 'text',     str(), None ],
     }
 
+    @friezetxn
     def add_host(self, template, name, role):
         try:
             host = OAG_Host((self, name), 'by_name')
@@ -275,7 +384,7 @@ class OAG_Site(OAG_RootNode):
 
         return OAG_SysMount(initprms=store_init)
 
-class OAG_SysMount(OAG_RootNode):
+class OAG_SysMount(OAG_FriezeRoot):
 
     @staticproperty
     def context(cls): return "frieze"
@@ -311,7 +420,7 @@ class OAG_SysMount(OAG_RootNode):
     def zpool(self):
         return "%s%d" % (self.appmnt.app.service, self.appmnt.app.stripe)
 
-class OAG_AppRequiredMount(OAG_RootNode):
+class OAG_AppRequiredMount(OAG_FriezeRoot):
 
     @staticproperty
     def context(cls): return "frieze"
@@ -322,7 +431,7 @@ class OAG_AppRequiredMount(OAG_RootNode):
         'mount' : [ 'text',          True, None ]
     }
 
-class OAG_NetIface(OAG_RootNode):
+class OAG_NetIface(OAG_FriezeRoot):
     class Type(enum.Enum):
         PHYSICAL    = 1
         OVPN_SERVER = 2
@@ -453,7 +562,7 @@ class OAG_NetIface(OAG_RootNode):
         else:
             OAError("Non-physical interfaces can't clone vlans")
 
-class OAG_Subnet(OAG_RootNode):
+class OAG_Subnet(OAG_FriezeRoot):
     """Subnets are doled out on a per-domain basis and then assigned to
     assigned to a site."""
     class Type(enum.Enum):
@@ -491,7 +600,7 @@ class OAG_Subnet(OAG_RootNode):
     def gateway(self):
         return "%s.1"  % self.sid
 
-class OAG_Host(OAG_RootNode):
+class OAG_Host(OAG_FriezeRoot):
     class Provider(enum.Enum):
         DIGITALOCEAN = 1
         VULTR        = 2
@@ -535,6 +644,7 @@ class OAG_Host(OAG_RootNode):
     def fqdn(self):
         return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
 
+    @friezetxn
     def add_clone_iface(self, name, type_, bridge_components):
         with OADbTransaction("Bridge creation"):
             clone = self.add_iface(name, type_=type_)
@@ -621,7 +731,7 @@ class OAG_Host(OAG_RootNode):
     def slot_factor(self, val):
         self._slot_factor = val
 
-class OAG_Sysctls(OAG_RootNode):
+class OAG_Sysctls(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
 
@@ -638,7 +748,7 @@ class OAG_Sysctls(OAG_RootNode):
         'boot'      : [ 'boolean', True, None ]
     }
 
-class OAG_Application(OAG_RootNode):
+class OAG_Application(OAG_FriezeRoot):
     """An AppContainer is the running unit of work. """
 
     @staticproperty
@@ -667,7 +777,7 @@ class OAG_Application(OAG_RootNode):
     def slot_factor(self):
         return (self.cores if self.cores else 0.25) * (self.memory if self.memory else 256)
 
-class OAG_Deployment(OAG_RootNode):
+class OAG_Deployment(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
 
@@ -682,11 +792,13 @@ class OAG_Deployment(OAG_RootNode):
         'name'     : [ 'text',     True,  None ],
     }
 
+    @friezetxn
     def add_application(self, template, affinity=None, stripes=1):
         """ Where should we put this new application? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If template doesn't specify cores or memory required, just go ahead
         and put it on the first host with ANY space on it"""
+
         if isinstance(template, AppTemplate):
             try:
                 app = OAG_Application((self, template.name), 'by_name')
@@ -764,6 +876,10 @@ Deployment = OAG_Deployment
 
 p_domain = None
 
+def domain():
+    global p_domain
+    return p_domain
+
 def set_domain(domain):
     global p_domain
     gen_domain = False
@@ -778,11 +894,12 @@ def set_domain(domain):
 
     if gen_domain:
         try:
-            p_domain = OAG_Domain(domain, 'by_domain')
+            p_domain = OAG_Domain(domain, 'by_domain')[-1]
         except OAGraphRetrieveError:
             p_domain =\
                 OAG_Domain().db.create({
-                    'domain'   : domain,
+                    'domain' : domain,
+                    'version_name' : str(),
                     'deployed' : False,
                 })
 
