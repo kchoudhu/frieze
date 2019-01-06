@@ -827,7 +827,7 @@ class OAG_Deployment(OAG_FriezeRoot):
         else:
             raise OAError("AppGroups not yet supported")
 
-        return app
+        return self
 
     @property
     def containers(self):
