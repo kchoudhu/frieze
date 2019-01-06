@@ -694,6 +694,7 @@ class OAG_Host(OAG_FriezeRoot):
                         #
                         # If the nth subnet is not available on the sitebastion, this
                         # interface is to be left unrouted.
+                        self.site.db.search()
                         for host in self.site.compute_hosts:
                             for i, int_iface in enumerate(host.internal_ifaces):
                                 try:
