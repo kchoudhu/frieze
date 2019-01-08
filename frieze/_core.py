@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain', 'HostOS', 'Tunable']
+__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain', 'HostOS', 'Tunable', 'Provider']
 
 import collections
 import enum
@@ -146,7 +146,7 @@ class OAG_Domain(OAG_FriezeRoot):
         return depl
 
     @friezetxn
-    def add_site(self, sitename, shortname):
+    def add_site(self, sitename, shortname, provider):
         try:
             site = OAG_Site((self, sitename), 'by_name')
         except OAGraphRetrieveError:
@@ -154,7 +154,8 @@ class OAG_Domain(OAG_FriezeRoot):
                 OAG_Site().db.create({
                     'domain'    : self,
                     'name'      : sitename,
-                    'shortname' : shortname
+                    'shortname' : shortname,
+                    'provider'  : provider,
                 })
 
         return site
@@ -297,6 +298,11 @@ class OAG_Container(OAG_FriezeRoot):
     def fqdn(self):
         return self.application.fqdn
 
+class Provider(enum.Enum):
+    DIGITALOCEAN = 1
+    VULTR        = 2
+    DC           = 3
+
 class OAG_Site(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
@@ -312,6 +318,7 @@ class OAG_Site(OAG_FriezeRoot):
         'domain'    : [ OAG_Domain, True,  None ],
         'name'      : [ 'text',     str(), None ],
         'shortname' : [ 'text',     str(), None ],
+        'provider'  : [ Provider,   True,  None ],
     }
 
     @friezetxn
@@ -326,7 +333,6 @@ class OAG_Site(OAG_FriezeRoot):
                     'cpus' : template.cpus,
                     'memory' : template.memory,
                     'bandwidth' : template.bandwidth,
-                    'provider' : template.provider.value,
                     'name' : name,
                     'role' : role.value,
                     'os' : template.os
@@ -601,10 +607,6 @@ class OAG_Subnet(OAG_FriezeRoot):
         return "%s.1"  % self.sid
 
 class OAG_Host(OAG_FriezeRoot):
-    class Provider(enum.Enum):
-        DIGITALOCEAN = 1
-        VULTR        = 2
-        DC           = 3
 
     class Role(enum.Enum):
         SITEROUTER   = 1
@@ -626,7 +628,6 @@ class OAG_Host(OAG_FriezeRoot):
         'cpus'      : [ 'int',    True, None ],
         'memory'    : [ 'int',    True, None ],
         'bandwidth' : [ 'int',    True, None ],
-        'provider'  : [ 'int',    True, None ],
         'name'      : [ 'text',   True, None ],
         'role'      : [ 'int',    True, None ],
         'os'        : [ HostOS,   True, None ],
@@ -839,11 +840,10 @@ class OAG_Deployment(OAG_FriezeRoot):
         return containers
 
 class HostTemplate(object):
-    def __init__(self, cpus=None, memory=None, bandwidth=None, provider=None, sysctls=None, os=HostOS.FreeBSD_11_2, interfaces=[]):
+    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_11_2, interfaces=[]):
         self.cpus = cpus
         self.memory = memory
         self.bandwidth = bandwidth
-        self.provider = provider
         self.interfaces = interfaces
         self.os = os
         self.sysctls = sysctls
