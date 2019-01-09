@@ -48,11 +48,12 @@ class VultrShim(CloudInterface):
         return rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
 
     def server_list(self, show_delete=False):
+        api_ret = self.api.server.list()
         rets = [{
             'vsubid' : k,
             'label'  : v['label'],
             'server' : v,
-        } for k, v in self.api.server.list().items()]
+        } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
         return rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
 
 class ExtCloud(object):
