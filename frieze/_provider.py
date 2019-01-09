@@ -15,7 +15,10 @@ class CloudInterface(object):
     def block_delete_mark(self, subid, label):
         raise NotImplementedError("Implement in deriving Shim")
 
-    def block_list(self):
+    def block_list(self, show_delete=False):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def server_list(self, show_delete=False):
         raise NotImplementedError("Implement in deriving Shim")
 
 class VultrShim(CloudInterface):
@@ -36,13 +39,21 @@ class VultrShim(CloudInterface):
     def block_delete_mark(self, subid, label):
         self.api.block.label_set(subid, label)
 
-    def block_list(self):
-        rets = self.api.block.list()
-        return [{
+    def block_list(self, show_delete=False):
+        rets = [{
             'vsubid' : ret['SUBID'],
             'label'  : ret['label'],
             'asset'  : ret
-        } for ret in rets]
+        } for ret in self.api.block.list()]
+        return rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+
+    def server_list(self, show_delete=False):
+        rets = [{
+            'vsubid' : k,
+            'label'  : v['label'],
+            'server' : v,
+        } for k, v in self.api.server.list().items()]
+        return rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
 
 class ExtCloud(object):
 
