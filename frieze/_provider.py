@@ -5,6 +5,13 @@ __all__ = ['ExtCloud']
 import vultr
 
 class CloudInterface(object):
+
+    def block_create(self, location, size_gb, label=None):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def block_delete(self, subid):
+        raise NotImplementedError("Implement in deriving Shim")
+
     def block_list(self):
         raise NotImplementedError("Implement in deriving Shim")
 
@@ -13,8 +20,24 @@ class VultrShim(CloudInterface):
     def __init__(self, apikey):
         self.api = vultr.Vultr(apikey)
 
+    def block_create(self, location, size_gb, label=None):
+        rets = self.api.block.create(1, size_gb, label)
+        return {
+            'vsubid' : rets['SUBID']
+        }
+
+    def block_delete(self, subid):
+        rets = self.api.block.delete(subid)
+        return
+
     def block_list(self):
-        return self.api.block.list()
+        rets = self.api.block.list()
+        return [{
+            'vsubid' : ret['SUBID'],
+            'label'  : ret['label'],
+            'size'   : ret['size_gb']
+        } for ret in rets]
+
 
 class ExtCloud(object):
 

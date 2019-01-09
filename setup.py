@@ -16,7 +16,8 @@ setup(name='frieze',
       license='BSD',
       packages=['frieze'],
       install_requires=[
-        'openarc'
+        'openarc',
+        'vultr'
       ],
       include_package_data=True,
       zip_safe=False)
