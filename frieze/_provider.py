@@ -12,6 +12,9 @@ class CloudInterface(object):
     def block_delete(self, subid):
         raise NotImplementedError("Implement in deriving Shim")
 
+    def block_delete_mark(self, subid, label):
+        raise NotImplementedError("Implement in deriving Shim")
+
     def block_list(self):
         raise NotImplementedError("Implement in deriving Shim")
 
@@ -30,14 +33,16 @@ class VultrShim(CloudInterface):
         rets = self.api.block.delete(subid)
         return
 
+    def block_delete_mark(self, subid, label):
+        self.api.block.label_set(subid, label)
+
     def block_list(self):
         rets = self.api.block.list()
         return [{
             'vsubid' : ret['SUBID'],
             'label'  : ret['label'],
-            'size'   : ret['size_gb']
+            'asset'  : ret
         } for ret in rets]
-
 
 class ExtCloud(object):
 
