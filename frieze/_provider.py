@@ -5,7 +5,8 @@ __all__ = ['ExtCloud']
 import vultr
 
 class CloudInterface(object):
-
+    """Minimal functionality that needs to be implemented by a deriving shim
+    to a cloud service"""
     def block_create(self, location, size_gb, label=None):
         raise NotImplementedError("Implement in deriving Shim")
 
@@ -19,6 +20,9 @@ class CloudInterface(object):
         raise NotImplementedError("Implement in deriving Shim")
 
     def server_list(self, show_delete=False):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def snapshot_list(self):
         raise NotImplementedError("Implement in deriving Shim")
 
 class VultrShim(CloudInterface):
@@ -55,6 +59,16 @@ class VultrShim(CloudInterface):
             'server' : v,
         } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
         return rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+
+    def snapshot_list(self):
+        api_ret = self.api.snapshot.list()
+        rets = [{
+            'vsubid'     : k,
+            'label'      : v['description'],
+            'crdatetime' : v['date_created'],
+            'asset'      : v,
+        } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
+        return sorted(rets, key=lambda x: x['crdatetime'], reverse=True)
 
 class ExtCloud(object):
 
