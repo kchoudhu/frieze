@@ -45,20 +45,24 @@ class VultrShim(CloudInterface):
 
     def block_list(self, show_delete=False):
         rets = [{
-            'vsubid' : ret['SUBID'],
-            'label'  : ret['label'],
-            'asset'  : ret
+            'vsubid'     : ret['SUBID'],
+            'label'      : ret['label'],
+            'crdatetime' : ret['date_created'],
+            'asset'      : ret
         } for ret in self.api.block.list()]
-        return rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+        filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+        return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
     def server_list(self, show_delete=False):
         api_ret = self.api.server.list()
         rets = [{
-            'vsubid' : k,
-            'label'  : v['label'],
-            'server' : v,
+            'vsubid'     : k,
+            'label'      : v['label'],
+            'crdatetime' : v['date_created'],
+            'asset'      : v,
         } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
-        return rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+        filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+        return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
     def snapshot_list(self):
         api_ret = self.api.snapshot.list()
