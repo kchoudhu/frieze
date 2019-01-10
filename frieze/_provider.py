@@ -8,7 +8,7 @@ import vultr
 class CloudInterface(object):
     """Minimal functionality that needs to be implemented by a deriving shim
     to a cloud service"""
-    def block_create(self, location, size_gb, label=None):
+    def block_create(self, blockstore):
         raise NotImplementedError("Implement in deriving Shim")
 
     def block_delete(self, subid):
@@ -52,11 +52,56 @@ class VultrShim(CloudInterface):
         SNAPSHOT      = 164
         FreeBSD_12_0  = 327
 
+    def bin_location(self, location):
+        from ._core import Location as fLocation
+        ret = None
+        if location==fLocation.NY:
+            ret = self.Location.NA_EWR
+        elif location==fLocation.LDN:
+            ret = self.Location.EU_LHR
+        else:
+            raise Exception("Location not supported by API")
+        return ret.value
+
+    def bin_host_plan(self, host):
+        ret = None
+        gb_memory = host.memory/1024
+        if host.cpus == 1:
+            ret = self.Plan.VPS_1_1_25 if gb_memory < 2 else self.Plan.VPS_1_2_40
+        elif host.cpus == 2:
+            ret = self.Plan.VPS_2_4_60
+        elif 2 < host.cpus <= 4:
+            ret = self.Plan.VPS_4_8_100
+        elif 4 < host.cpus <= 6:
+            ret = self.Plan.VPS_6_16_200
+        elif 6 < host.cpus <= 8:
+            ret = self.Plan.VPS_8_32_300
+        elif 8 < host.cpus <= 16:
+            ret = self.Plan.VPS_16_64_400
+        elif 16 < host.cpus <=24:
+            ret = self.Plan.VPS_24_96_800
+        else:
+            raise Exception("Too many CPUs requested")
+        return ret.value
+
+    def bin_os(self, os, snapshot):
+        from ._osinfo import HostOS as fHostOS
+        ret = None
+        if snapshot:
+            ret = self.OS.SNAPSHOT
+        else:
+            if os==fHostOS.FreeBSD_12_0:
+                ret = self.OS.FreeBSD_12_0
+            else:
+                raise Exception("Operating system not supported by API")
+        return ret.value
+
     def __init__(self, apikey):
         self.api = vultr.Vultr(apikey)
 
-    def block_create(self, location, size_gb, label=None):
-        rets = self.api.block.create(1, size_gb, label)
+    def block_create(self, blockstore):
+        location = self.bin_location(blockstore.location)
+        rets = self.api.block.create(location, blockstore.appmnt.size_gb, blockstore.blockstore_name)
         return {
             'vsubid' : rets['SUBID']
         }
@@ -79,58 +124,11 @@ class VultrShim(CloudInterface):
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
     def server_create(self, host, snapshot=None, label=None):
-        from ._core import Location as fLocation
-        from ._osinfo import HostOS as fHostOS
-
-        # Binning is done on CPU basis, and RAM is used to distinguish between plans
-        def bin_host_request(host):
-            ret = None
-            gb_memory = host.memory/1024
-            if host.cpus == 1:
-                ret = self.Plan.VPS_1_1_25 if gb_memory < 2 else self.Plan.VPS_1_2_40
-            elif host.cpus == 2:
-                ret = self.Plan.VPS_2_4_60
-            elif 2 < host.cpus <= 4:
-                ret = self.Plan.VPS_4_8_100
-            elif 4 < host.cpus <= 6:
-                ret = self.Plan.VPS_6_16_200
-            elif 6 < host.cpus <= 8:
-                ret = self.Plan.VPS_8_32_300
-            elif 8 < host.cpus <= 16:
-                ret = self.Plan.VPS_16_64_400
-            elif 16 < host.cpus <=24:
-                ret = self.Plan.VPS_24_96_800
-            else:
-                raise Exception("Too many CPUs requested")
-            return ret.value
-
-        def bin_host_location(host):
-            ret = None
-            if host.site.location==fLocation.NY:
-                ret = self.Location.NA_EWR
-            elif host.site.location==fLocation.LDN:
-                ret = self.Location.EU_LHR
-            else:
-                raise Exception("Location not supported by API")
-            return ret.value
-
-        def bin_host_os(host):
-            ret = None
-            if snapshot:
-                ret = self.OS.SNAPSHOT
-            else:
-                if host.os==fHostOS.FreeBSD_12_0:
-                    ret = self.OS.FreeBSD_12_0
-                else:
-                    raise Exception("Operating system not supported by API")
-
-            return ret.value
-
-        vpstype  = bin_host_request(host)
-        location = bin_host_location(host)
-        osid     = bin_host_os(host)
 
         snapshot = snapshot['vsubid']
+        vpstype  = self.bin_host_plan(host)
+        location = self.bin_location(host.site.location)
+        osid     = self.bin_os(host.os, snapshot)
 
         self.api.server.create(location, vpstype, osid, snapshotid=snapshot, label=label)
 
