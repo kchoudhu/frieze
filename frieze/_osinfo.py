@@ -6,6 +6,7 @@ import enum
 
 class HostOS(enum.Enum):
     FreeBSD_11_2 = 1
+    FreeBSD_12_0 = 2
 
 
 class Tunable(enum.Enum):
