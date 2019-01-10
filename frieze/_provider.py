@@ -2,6 +2,7 @@
 
 __all__ = ['ExtCloud']
 
+import enum
 import vultr
 
 class CloudInterface(object):
@@ -19,6 +20,12 @@ class CloudInterface(object):
     def block_list(self, show_delete=False):
         raise NotImplementedError("Implement in deriving Shim")
 
+    def server_create(self, host, snapshot=None, label=None):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def server_delete_mark(self, server):
+        raise NotImplementedError("Implement in deriving Shim")
+
     def server_list(self, show_delete=False):
         raise NotImplementedError("Implement in deriving Shim")
 
@@ -26,6 +33,24 @@ class CloudInterface(object):
         raise NotImplementedError("Implement in deriving Shim")
 
 class VultrShim(CloudInterface):
+
+    class Plan(enum.Enum):
+        VPS_1_1_25    = 201
+        VPS_1_2_40    = 202
+        VPS_2_4_60    = 203
+        VPS_4_8_100   = 204
+        VPS_6_16_200  = 205
+        VPS_8_32_300  = 206
+        VPS_16_64_400 = 207
+        VPS_24_96_800 = 208
+
+    class Location(enum.Enum):
+        NA_EWR        = 1
+        EU_LHR        = 8
+
+    class OS(enum.Enum):
+        SNAPSHOT      = 164
+        FreeBSD_12_0  = 327
 
     def __init__(self, apikey):
         self.api = vultr.Vultr(apikey)
@@ -40,8 +65,8 @@ class VultrShim(CloudInterface):
         rets = self.api.block.delete(subid)
         return
 
-    def block_delete_mark(self, subid, label):
-        self.api.block.label_set(subid, label)
+    def block_delete_mark(self, blockstore):
+        self.api.block.label_set(blockstore['vsubid'], 'delete:%s' % blockstore['label'])
 
     def block_list(self, show_delete=False):
         rets = [{
@@ -52,6 +77,65 @@ class VultrShim(CloudInterface):
         } for ret in self.api.block.list()]
         filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
+
+    def server_create(self, host, snapshot=None, label=None):
+        from ._core import Location as fLocation
+        from ._osinfo import HostOS as fHostOS
+
+        # Binning is done on CPU basis, and RAM is used to distinguish between plans
+        def bin_host_request(host):
+            ret = None
+            gb_memory = host.memory/1024
+            if host.cpus == 1:
+                ret = self.Plan.VPS_1_1_25 if gb_memory < 2 else self.Plan.VPS_1_2_40
+            elif host.cpus == 2:
+                ret = self.Plan.VPS_2_4_60
+            elif 2 < host.cpus <= 4:
+                ret = self.Plan.VPS_4_8_100
+            elif 4 < host.cpus <= 6:
+                ret = self.Plan.VPS_6_16_200
+            elif 6 < host.cpus <= 8:
+                ret = self.Plan.VPS_8_32_300
+            elif 8 < host.cpus <= 16:
+                ret = self.Plan.VPS_16_64_400
+            elif 16 < host.cpus <=24:
+                ret = self.Plan.VPS_24_96_800
+            else:
+                raise Exception("Too many CPUs requested")
+            return ret.value
+
+        def bin_host_location(host):
+            ret = None
+            if host.site.location==fLocation.NY:
+                ret = self.Location.NA_EWR
+            elif host.site.location==fLocation.LDN:
+                ret = self.Location.EU_LHR
+            else:
+                raise Exception("Location not supported by API")
+            return ret.value
+
+        def bin_host_os(host):
+            ret = None
+            if snapshot:
+                ret = self.OS.SNAPSHOT
+            else:
+                if host.os==fHostOS.FreeBSD_12_0:
+                    ret = self.OS.FreeBSD_12_0
+                else:
+                    raise Exception("Operating system not supported by API")
+
+            return ret.value
+
+        vpstype  = bin_host_request(host)
+        location = bin_host_location(host)
+        osid     = bin_host_os(host)
+
+        snapshot = snapshot['vsubid']
+
+        self.api.server.create(location, vpstype, osid, snapshotid=snapshot, label=label)
+
+    def server_delete_mark(self, server):
+        self.api.server.label_set(server['vsubid'], 'delete:%s' % server['label'])
 
     def server_list(self, show_delete=False):
         api_ret = self.api.server.list()
