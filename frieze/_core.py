@@ -301,7 +301,7 @@ class OAG_Container(OAG_FriezeRoot):
 
     @property
     def block_storage(self):
-        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host_name==self.fqdn)
+        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
     @property
     def fqdn(self):
@@ -395,13 +395,13 @@ class OAG_Site(OAG_FriezeRoot):
         """Analyzes containers on site and returns an OAG_BlockStore object
         listing block storage devices that need to be provided in order to run
         the site"""
-        store_init = [['container_name', 'site_name', 'host_name', 'location', 'appmnt']]
+        store_init = [['container_name', 'appmnt', 'host']]
         for container in self.containers:
             for app in container.application:
                 try:
                     if app.app_required_mount:
                         for arm in app.app_required_mount:
-                            store_init.append([container.fqdn, self.shortname, container.host.fqdn, container.host.site.location, arm.clone()])
+                            store_init.append([container.fqdn, arm.clone(), container.host.clone()])
                 except AttributeError:
                     # No apps pointed here yet
                     pass
@@ -457,15 +457,13 @@ class OAG_SysMount(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'container_name' : [ 'text',   True, None ],
-        'site_name'      : [ 'text',   True, None ],
-        'host_name'      : [ 'text',   True, None ],
-        'location'       : [ Location, True, None ],
         'appmnt'         : [ OAG_AppRequiredMount, True, None ],
+        'host'           : [ OAG_Host, True, None ]
     }
 
     @property
     def blockstore_name(self):
-        return "%s:%s:%s" % (self.site_name, self.container_name, self.appmnt.mount)
+        return "%s:%s:%s" % (self.host.site.shortname, self.container_name, self.appmnt.mount)
 
     @property
     def dataset(self):
@@ -693,7 +691,7 @@ class OAG_Host(OAG_FriezeRoot):
 
     @property
     def block_storage(self):
-        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host_name==self.fqdn)
+        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
     @property
     def containers(self):
