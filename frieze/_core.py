@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain', 'HostOS', 'Tunable', 'Provider']
+__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain', 'HostOS', 'Tunable', 'Provider', 'Location']
 
 import collections
 import enum
 import ipaddress
+import os
+import toml
 
 from pprint import pprint
 
@@ -12,6 +14,7 @@ from openarc import staticproperty, oagprop
 from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
+from openarc.env import getenv
 
 from ._osinfo import HostOS, Tunable
 
@@ -146,7 +149,7 @@ class OAG_Domain(OAG_FriezeRoot):
         return depl
 
     @friezetxn
-    def add_site(self, sitename, shortname, provider):
+    def add_site(self, sitename, shortname, provider, location):
         try:
             site = OAG_Site((self, sitename), 'by_name')
         except OAGraphRetrieveError:
@@ -156,6 +159,7 @@ class OAG_Domain(OAG_FriezeRoot):
                     'name'      : sitename,
                     'shortname' : shortname,
                     'provider'  : provider,
+                    'location'  : location,
                 })
 
         return site
@@ -191,6 +195,7 @@ class OAG_Domain(OAG_FriezeRoot):
                 'router'        : iface.host if iface else None,
                 'routing_iface' : iface,
             })
+
     @oagprop
     def containers(self, **kwargs):
         """Global view of jobs. Can be filtered by OAG_Deployment or OAG_Site
@@ -261,6 +266,10 @@ class OAG_Domain(OAG_FriezeRoot):
         return OAG_Container(initprms=containers)
 
     def deploy(self, version_name=str()):
+
+        for site in self.site:
+            site.prepare_infrastructure()
+
         return self
 
     @property
@@ -292,7 +301,7 @@ class OAG_Container(OAG_FriezeRoot):
 
     @property
     def block_storage(self):
-        return self.site.block_storage.clone().rdf.filter(lambda x: x.container_name==self.fqdn)
+        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host_name==self.fqdn)
 
     @property
     def fqdn(self):
@@ -302,6 +311,10 @@ class Provider(enum.Enum):
     DIGITALOCEAN = 1
     VULTR        = 2
     DC           = 3
+
+class Location(enum.Enum):
+    NY           = 1
+    LONDON       = 2
 
 class OAG_Site(OAG_FriezeRoot):
     @staticproperty
@@ -319,6 +332,7 @@ class OAG_Site(OAG_FriezeRoot):
         'name'      : [ 'text',     str(), None ],
         'shortname' : [ 'text',     str(), None ],
         'provider'  : [ Provider,   True,  None ],
+        'location'  : [ Location,   True,  None ],
     }
 
     @friezetxn
@@ -381,14 +395,56 @@ class OAG_Site(OAG_FriezeRoot):
         """Analyzes containers on site and returns an OAG_BlockStore object
         listing block storage devices that need to be provided in order to run
         the site"""
-        store_init = [['container_name', 'site_name', 'host_name', 'appmnt']]
+        store_init = [['container_name', 'site_name', 'host_name', 'location', 'appmnt']]
         for container in self.containers:
             for app in container.application:
-                if app.app_required_mount:
-                    for arm in app.app_required_mount:
-                        store_init.append([container.fqdn, self.shortname, container.host.fqdn, arm.clone()])
+                try:
+                    if app.app_required_mount:
+                        for arm in app.app_required_mount:
+                            store_init.append([container.fqdn, self.shortname, container.host.fqdn, container.host.site.location, arm.clone()])
+                except AttributeError:
+                    # No apps pointed here yet
+                    pass
 
-        return OAG_SysMount(initprms=store_init)
+        return OAG_SysMount() if len(store_init)==1 else OAG_SysMount(initprms=store_init)
+
+    def prepare_infrastructure(self):
+
+        from ._provider import ExtCloud
+
+        # Prep the external provider
+        extcloud = ExtCloud(self.provider)
+
+        # Collect block storage
+        needed_bs   = [bs.blockstore_name for bs in self.block_storage]
+        existing_bs = extcloud.block_list()
+
+        # Create list of block stores that need to be deleted, and mark them
+        # for deletion
+        delete_bs = [ebs for ebs in existing_bs if ebs['label'] not in needed_bs]
+        for bs in delete_bs:
+            extcloud.block_delete_mark(bs)
+
+        # Similarly create a list of items that need to be created, and issue
+        # creation statements to the API
+        if self.block_storage.size>0:
+            create_bs = self.block_storage.clone().rdf.filter(lambda x: x.blockstore_name not in [v['label'] for v in existing_bs])
+            for bs in create_bs:
+                extcloud.block_create(bs)
+
+        # Collect servers, again, taking care to
+        needed_srv = [srv.fqdn for srv in self.host]
+        existing_srv = extcloud.server_list()
+
+        delete_srv = [esrv for esrv in existing_srv if esrv['label'] not in needed_srv]
+        for srv in delete_srv:
+            extcloud.server_delete_mark(srv)
+
+        if self.host.size>0:
+            create_srv = self.host.clone().rdf.filter(lambda x: x.fqdn not in [v['label'] for v in existing_srv])
+            snapshot = extcloud.snapshot_list()[0]
+            for srv in create_srv:
+                extcloud.server_create(srv, snapshot, label=srv.fqdn)
 
 class OAG_SysMount(OAG_FriezeRoot):
 
@@ -400,9 +456,10 @@ class OAG_SysMount(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'container_name' : [ 'text', True, None ],
-        'site_name'      : [ 'text', True, None ],
-        'host_name'      : [ 'text', True, None ],
+        'container_name' : [ 'text',   True, None ],
+        'site_name'      : [ 'text',   True, None ],
+        'host_name'      : [ 'text',   True, None ],
+        'location'       : [ Location, True, None ],
         'appmnt'         : [ OAG_AppRequiredMount, True, None ],
     }
 
@@ -433,8 +490,9 @@ class OAG_AppRequiredMount(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'app'   : [ OAG_Application, True, None ],
-        'mount' : [ 'text',          True, None ]
+        'app'     : [ OAG_Application, True, None ],
+        'mount'   : [ 'text',          True, None ],
+        'size_gb' : [ 'int',           True, None ],
     }
 
 class OAG_NetIface(OAG_FriezeRoot):
@@ -635,7 +693,7 @@ class OAG_Host(OAG_FriezeRoot):
 
     @property
     def block_storage(self):
-        return self.site.block_storage.clone().rdf.filter(lambda x: x.host_name==self.fqdn)
+        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host_name==self.fqdn)
 
     @property
     def containers(self):
@@ -820,11 +878,12 @@ class OAG_Deployment(OAG_FriezeRoot):
                             'memory' : template.memory,
                         })
 
-                    for mount in template.mounts:
+                    for (mount, size_gb) in template.mounts:
                         appmount =\
                             OAG_AppRequiredMount().db.create({
                                 'app' : app,
-                                'mount' : mount
+                                'mount' : mount,
+                                'size_gb' : size_gb,
                             })
         else:
             raise OAError("AppGroups not yet supported")
@@ -840,7 +899,7 @@ class OAG_Deployment(OAG_FriezeRoot):
         return containers
 
 class HostTemplate(object):
-    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_11_2, interfaces=[]):
+    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[]):
         self.cpus = cpus
         self.memory = memory
         self.bandwidth = bandwidth
@@ -881,7 +940,7 @@ def domain():
     global p_domain
     return p_domain
 
-def set_domain(domain):
+def set_domain(domain, cfgfile=None):
     global p_domain
     gen_domain = False
 
@@ -905,5 +964,40 @@ def set_domain(domain):
                 })
 
             p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
+
+    # Load configuration
+    def get_cfg_file_path():
+        if cfgfile is None:
+
+            cfg_name = "frieze"
+
+            try:
+                cfg_file_path = "./%s" % cfg_name
+                with open(cfg_file_path, 'r'):
+                    return cfg_file_path
+            except IOError:
+                pass
+
+            try:
+                cfg_file_path = os.path.expanduser("~/.%s" % cfg_name)
+                with open(cfg_file_path, 'r'):
+                    return cfg_file_path
+            except IOError:
+                pass
+
+            cfg_file_path = "/usr/local/etc/%s" % cfg_name
+        else:
+            cfg_file_path = cfgfile
+
+        return cfg_file_path
+
+    cfg_file_path = get_cfg_file_path()
+    print("Loading FRIEZE config: [%s]" % (cfg_file_path))
+    try:
+        with open(cfg_file_path) as f:
+            appcfg = toml.loads(f.read())
+            getenv().merge_app_cfg(appcfg)
+    except IOError:
+        raise OAError("%s does not exist" % cfg_file_path)
 
     return p_domain

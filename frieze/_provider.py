@@ -5,6 +5,8 @@ __all__ = ['ExtCloud']
 import enum
 import vultr
 
+from openarc.env import getenv
+
 class CloudInterface(object):
     """Minimal functionality that needs to be implemented by a deriving shim
     to a cloud service"""
@@ -97,7 +99,7 @@ class VultrShim(CloudInterface):
         return ret.value
 
     def __init__(self, apikey):
-        self.api = vultr.Vultr(apikey)
+        self.api = vultr.Vultr(apikey if apikey else getenv().extcreds['vultr']['apikey'])
 
     def block_create(self, blockstore):
         location = self.bin_location(blockstore.location)
