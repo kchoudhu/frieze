@@ -10,7 +10,13 @@ from openarc.env import getenv
 class CloudInterface(object):
     """Minimal functionality that needs to be implemented by a deriving shim
     to a cloud service"""
+    def block_attach(self, blockstore):
+        raise NotImplementedError("Implement in deriving Shim")
+
     def block_create(self, blockstore):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def block_detatch(self, blockstore):
         raise NotImplementedError("Implement in deriving Shim")
 
     def block_delete(self, subid):
@@ -101,6 +107,31 @@ class VultrShim(CloudInterface):
     def __init__(self, apikey):
         self.api = vultr.Vultr(apikey if apikey else getenv().extcreds['vultr']['apikey'])
 
+    def block_attach(self, blockstore):
+        v_blockstores = self.block_list()
+
+        print("Looking up mount status of %s" % blockstore.blockstore_name)
+        v_bs = [v_bs for v_bs in v_blockstores if v_bs['label']==blockstore.blockstore_name][0]
+        v_curr_mounthost_subid = v_bs['asset']['attached_to_SUBID']
+
+        v_hosts = self.server_list()
+        v_req_mounthost = [v_host for v_host in v_hosts if v_host['label']==blockstore.host.fqdn][0]
+
+        if v_curr_mounthost_subid is None:
+            print("  Blockstore is currently unmounted")
+            print("  Making call to attach [%s] to [%s]/[%s]" % (v_bs['vsubid'], v_req_mounthost['vsubid'], v_req_mounthost['label']))
+            api_ret = self.api.block.attach(v_bs['vsubid'], v_req_mounthost['vsubid'])
+        else:
+            v_curr_mounthost = [v_host for v_host in v_hosts if v_host['vsubid']==str(v_curr_mounthost_subid)][0]
+            print("  [%s] currently mounted on: [%s]/[%s]" % (v_bs['vsubid'], v_curr_mounthost['vsubid'], v_curr_mounthost['label']))
+            if v_curr_mounthost['label'] != blockstore.host.fqdn:
+                print("  Making call to detach [%s] from incorrect host" % v_bs['vsubid'])
+                api_ret = self.api.block.detach(v_bs['vsubid'])
+                print("  Making call to attach [%s] to [%s]/[%s]" % (v_bs['vsubid'], v_req_mounthost['vsubid'], v_req_mounthost['label']))
+                api_ret = self.api.block.attach(v_bs['vsubid'], v_req_mounthost['vsubid'])
+            else:
+                print("  [%s] already mounted on correct host [%s]/[%s]" % (v_bs['vsubid'], v_req_mounthost['vsubid'], v_req_mounthost['label']))
+
     def block_create(self, blockstore):
         location = self.bin_location(blockstore.host.site.location)
         rets = self.api.block.create(location, blockstore.appmnt.size_gb, blockstore.blockstore_name)
@@ -137,8 +168,8 @@ class VultrShim(CloudInterface):
     def server_delete_mark(self, server):
         self.api.server.label_set(server['vsubid'], 'delete:%s' % server['label'])
 
-    def server_list(self, show_delete=False):
-        api_ret = self.api.server.list()
+    def server_list(self, subid=None, show_delete=False):
+        api_ret = self.api.server.list(subid)
         rets = [{
             'vsubid'     : k,
             'label'      : v['label'],

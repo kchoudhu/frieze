@@ -432,7 +432,8 @@ class OAG_Site(OAG_FriezeRoot):
             for bs in create_bs:
                 extcloud.block_create(bs)
 
-        # Collect servers, again, taking care to
+        # Collect servers, again, taking care to making sure to not create ones
+        # that are already created.
         needed_srv = [srv.fqdn for srv in self.host]
         existing_srv = extcloud.server_list()
 
@@ -445,6 +446,14 @@ class OAG_Site(OAG_FriezeRoot):
             snapshot = extcloud.snapshot_list()[0]
             for srv in create_srv:
                 extcloud.server_create(srv, snapshot, label=srv.fqdn)
+
+
+        # Attach block storage to relevant servers. block_attach() keeps track
+        # of detaching and attaching storage as necessary if our new config has
+        # resulted in a container moving from one host to another.
+        if self.block_storage.size>0:
+            for bs in self.block_storage:
+                extcloud.block_attach(bs)
 
 class OAG_SysMount(OAG_FriezeRoot):
 
