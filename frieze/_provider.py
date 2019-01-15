@@ -28,6 +28,15 @@ class CloudInterface(object):
     def block_list(self, show_delete=False):
         raise NotImplementedError("Implement in deriving Shim")
 
+    def network_attach(self, host, network):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def network_create(self, site, label=None):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def network_list(self, show_delete=False):
+        raise NotImplementedError("Implement in deriving Shim")
+
     def server_create(self, host, snapshot=None, label=None):
         raise NotImplementedError("Implement in deriving Shim")
 
@@ -35,6 +44,9 @@ class CloudInterface(object):
         raise NotImplementedError("Implement in deriving Shim")
 
     def server_list(self, show_delete=False):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def server_private_network_list(self):
         raise NotImplementedError("Implement in deriving Shim")
 
     def snapshot_list(self):
@@ -156,6 +168,34 @@ class VultrShim(CloudInterface):
         filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
+    def network_attach(self, host, network):
+        print("Looking up private network status for [%s]" % host.fqdn)
+        v_host = [v_host for v_host in self.server_list() if v_host['label']==host.fqdn][0]
+        v_pnws = self.server_private_network_list(v_host['vsubid'])
+        if network['vsubid'] not in v_pnws:
+            print("  Network is currently unattached")
+            print("  Making call to attach [%s] to [%s]/[%s]" % (network['vsubid'], v_host['vsubid'], v_host['label']))
+            self.api.server.private_network_enable(v_host['vsubid'], network['vsubid'])
+        else:
+            print("  Network [%s] is already attached to [%s]/[%s]" % (network['vsubid'], v_host['vsubid'], v_host['label']))
+
+    def network_create(self, site, label=None):
+
+        location = self.bin_location(site.location)
+
+        self.api.network.create(location, description=site.shortname)
+
+    def network_list(self, show_delete=False):
+        api_ret = self.api.network.list()
+        rets = [{
+            'vsubid'     : k,
+            'label'      : v['description'],
+            'crdatetime' : v['date_created'],
+            'asset'      : v,
+        } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
+        filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+        return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
+
     def server_create(self, host, snapshot=None, label=None):
 
         snapshot = snapshot['vsubid']
@@ -178,6 +218,10 @@ class VultrShim(CloudInterface):
         } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
         filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
+
+    def server_private_network_list(self, subid):
+        api_ret = self.api.server.private_network_list(subid)
+        return [ k for k, v in ({} if len(api_ret)==0 else api_ret.items())]
 
     def snapshot_list(self):
         api_ret = self.api.snapshot.list()

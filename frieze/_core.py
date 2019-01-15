@@ -432,6 +432,15 @@ class OAG_Site(OAG_FriezeRoot):
             for bs in create_bs:
                 extcloud.block_create(bs)
 
+        # Make sure private network is available
+        needed_nw = [self.shortname]
+        existing_nw = extcloud.network_list()
+
+        if self.size>0:
+            create_nw = self.clone().rdf.filter(lambda x: x.shortname not in [v['label'] for v in existing_nw])
+            for nw in create_nw:
+                extcloud.network_create(nw)
+
         # Collect servers, again, taking care to making sure to not create ones
         # that are already created.
         needed_srv = [srv.fqdn for srv in self.host]
@@ -447,13 +456,21 @@ class OAG_Site(OAG_FriezeRoot):
             for srv in create_srv:
                 extcloud.server_create(srv, snapshot, label=srv.fqdn)
 
-
         # Attach block storage to relevant servers. block_attach() keeps track
         # of detaching and attaching storage as necessary if our new config has
         # resulted in a container moving from one host to another.
         if self.block_storage.size>0:
             for bs in self.block_storage:
                 extcloud.block_attach(bs)
+
+        if self.host.size>0:
+            networks = extcloud.network_list()
+            for host in self.host:
+                for i, netif in enumerate(host.net_iface.rdf.filter(lambda x: OAG_NetIface.Type(x.type)==OAG_NetIface.Type.PHYSICAL)):
+                    if i==0:
+                        continue
+                    else:
+                        extcloud.network_attach(host, networks[i-1])
 
 class OAG_SysMount(OAG_FriezeRoot):
 
