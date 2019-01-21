@@ -269,9 +269,9 @@ class OAG_Domain(OAG_FriezeRoot):
     def deploy(self, version_name=str()):
 
         for site in self.site:
-            site.prepare_infrastructure()
-
-        return self
+            # site.prepare_infrastructure()
+            for host in site.host:
+                host.configure()
 
     @property
     def is_frozen(self):
@@ -716,23 +716,6 @@ class OAG_Host(OAG_FriezeRoot):
         'os'        : [ HostOS,   True, None ],
     }
 
-    @property
-    def block_storage(self):
-        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
-
-    @property
-    def capabilities(self):
-        self.__set_capability()
-        return self._capabilities[self.fqdn]
-
-    @property
-    def containers(self):
-        return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
-
-    @property
-    def fqdn(self):
-        return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
-
     @friezetxn
     def add_clone_iface(self, name, type_, bridge_components):
         with OADbTransaction("Bridge creation"):
@@ -747,6 +730,7 @@ class OAG_Host(OAG_FriezeRoot):
 
         return clone
 
+    @friezetxn
     def add_iface(self, name, is_external=False, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
         try:
             iface = OAG_NetIface((self, name), 'by_name')
@@ -796,6 +780,23 @@ class OAG_Host(OAG_FriezeRoot):
                         pass
 
         return iface
+
+    @property
+    def block_storage(self):
+        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
+
+    @property
+    def capabilities(self):
+        self.__set_capability()
+        return self._capabilities[self.fqdn]
+
+    @property
+    def containers(self):
+        return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
+
+    @property
+    def fqdn(self):
+        return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
 
     @property
     def internal_ifaces(self):
