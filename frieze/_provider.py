@@ -105,7 +105,7 @@ class VultrShim(CloudInterface):
         return ret.value
 
     def bin_os(self, os, snapshot):
-        from ._osinfo import HostOS as fHostOS
+        from .osinfo import HostOS as fHostOS
         ret = None
         if snapshot:
             ret = self.OS.SNAPSHOT

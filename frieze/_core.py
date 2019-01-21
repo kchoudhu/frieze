@@ -16,7 +16,8 @@ from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
 from openarc.env import getenv
 
-from ._osinfo import HostOS, Tunable
+from .capabilities import OSCapabilityFactory
+from .osinfo import HostOS, Tunable
 
 ####### Database structures, be nice
 
@@ -720,6 +721,11 @@ class OAG_Host(OAG_FriezeRoot):
         return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
     @property
+    def capabilities(self):
+        self.__set_capability()
+        return self._capabilities[self.fqdn]
+
+    @property
     def containers(self):
         return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
 
@@ -814,6 +820,23 @@ class OAG_Host(OAG_FriezeRoot):
     @slot_factor.setter
     def slot_factor(self, val):
         self._slot_factor = val
+
+    def __set_capability(self):
+        ccap = {}
+        try:
+            ccap = self._capabilities
+            ccap[self.fqdn]
+            print("Cache hit")
+        except (AttributeError, KeyError):
+            # _capabilities doesn't exist yet
+            ccap[self.fqdn] = OSCapabilityFactory(self).capabilities
+
+        setattr(self, '_capabilities', ccap)
+
+    def __next__(self):
+        super().__next__()
+        self.__set_capability()
+        return self
 
 class OAG_Sysctls(OAG_FriezeRoot):
     @staticproperty
