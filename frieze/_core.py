@@ -6,6 +6,8 @@ import collections
 import enum
 import ipaddress
 import os
+import shutil
+import tarfile
 import toml
 
 from pprint import pprint
@@ -268,8 +270,12 @@ class OAG_Domain(OAG_FriezeRoot):
 
     def deploy(self, version_name=str()):
 
-        for site in self.site:
-            site.prepare_infrastructure()
+        if self.is_frozen:
+            for site in self.site:
+                site.prepare_infrastructure()
+                site.configure(push=False)
+        else:
+            raise OAError("Can't deploy domain that hasn't been snapshotted")
 
     @property
     def is_frozen(self):
@@ -384,6 +390,40 @@ class OAG_Site(OAG_FriezeRoot):
             return compute_hosts
         else:
             return None
+
+    def configure(self, frieze_dir=None, push=True):
+
+        # Decide on directory to output files to
+        if not frieze_dir:
+            frieze_dir = os.path.expanduser("~/.frieze")
+
+        version_dir = os.path.join(frieze_dir, self.domain.domain, self.domain.version_name)
+        version_deploy_dir = os.path.join(version_dir, 'deploy')
+        os.makedirs(version_deploy_dir, exist_ok=True)
+
+        # Create configurations for each host. The configurations contain a
+        # full suite of config files,
+        for host in self.host:
+            host_cfg_dir = os.path.join(version_dir, host.fqdn)
+
+            # Fresh start
+            try:
+                shutil.rmtree(host_cfg_dir)
+            except FileNotFoundError:
+                pass
+            os.makedirs(host_cfg_dir)
+
+            # Generate host config
+            host.configure(host_cfg_dir)
+
+            # Create deployable tarballs
+            host_tar_file = os.path.join(version_deploy_dir, '%s.tar.gz' % host.fqdn)
+            with tarfile.open(host_tar_file, "w:gz") as tar:
+                tar.add(host_cfg_dir)
+
+            # Use Ansible to compress and deploy manifest to each host
+            if push:
+                pass
 
     @property
     def containers(self):
@@ -788,6 +828,9 @@ class OAG_Host(OAG_FriezeRoot):
         self.__set_capability()
         return self._capabilities[self.fqdn]
 
+    def configure(self, targetdir):
+        pass
+
     @property
     def containers(self):
         return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
@@ -1029,13 +1072,13 @@ def set_domain(domain, cfgfile=None):
                 pass
 
             try:
-                cfg_file_path = os.path.expanduser("~/.%s" % cfg_name)
+                cfg_file_path = os.path.expanduser("~/.%s/%s.conf" % (cfg_name, cfg_name))
                 with open(cfg_file_path, 'r'):
                     return cfg_file_path
             except IOError:
                 pass
 
-            cfg_file_path = "/usr/local/etc/%s" % cfg_name
+            cfg_file_path = "/usr/local/etc/%s.conf" % cfg_name
         else:
             cfg_file_path = cfgfile
 
