@@ -269,9 +269,7 @@ class OAG_Domain(OAG_FriezeRoot):
     def deploy(self, version_name=str()):
 
         for site in self.site:
-            # site.prepare_infrastructure()
-            for host in site.host:
-                host.configure()
+            site.prepare_infrastructure()
 
     @property
     def is_frozen(self):
@@ -827,12 +825,16 @@ class OAG_Host(OAG_FriezeRoot):
         try:
             ccap = self._capabilities
             ccap[self.fqdn]
-            print("Cache hit")
         except (AttributeError, KeyError):
             # _capabilities doesn't exist yet
             ccap[self.fqdn] = OSCapabilityFactory(self).capabilities
 
         setattr(self, '_capabilities', ccap)
+
+    def __getitem__(self, indexinfo, preserve_cache=False):
+        super().__getitem__(indexinfo, preserve_cache)
+        self.__set_capability()
+        return self
 
     def __next__(self):
         super().__next__()
