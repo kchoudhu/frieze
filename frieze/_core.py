@@ -366,12 +366,15 @@ class OAG_Site(OAG_FriezeRoot):
 
             # Add tunable parameters
             for sysctl in template.sysctls:
-                OAG_Sysctls().db.create({
-                    'host' : host,
-                    'tunable' : sysctl[0],
-                    'boot' : sysctl[1],
-                    'value' : sysctl[2],
-                })
+                if sysctl[0].family == host.os.family:
+                    OAG_Sysctls().db.create({
+                        'host' : host,
+                        'tunable' : sysctl[0],
+                        'boot' : sysctl[1],
+                        'value' : sysctl[2],
+                    })
+                else:
+                    print("[%s] tunable not compatible with [%s]" % (sysctl[0], host.os))
 
         return host
 

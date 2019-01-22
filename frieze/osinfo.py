@@ -22,5 +22,12 @@ class HostOS(enum.Enum):
 class Tunable(enum.Enum):
     # F - FreeBSD
     # L - Linux
-    F_HW_VTNET_CSUM_DISABLE = 1000
-    F_NET_FIBS              = 2000
+    F_HW_VTNET_CSUM_DISABLE = 10001
+    F_NET_FIBS              = 11001
+
+    @property
+    def family(self):
+        return {
+            1 : OSFamily.FreeBSD,
+            2 : OSFamily.Linux
+        }[self.value//10000]
