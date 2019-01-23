@@ -18,7 +18,6 @@ from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
 from openarc.env import getenv
 
-from .capabilities import OSCapabilityFactory
 from .osinfo import HostOS, Tunable
 
 ####### Database structures, be nice
@@ -375,6 +374,10 @@ class OAG_Site(OAG_FriezeRoot):
                     })
                 else:
                     print("[%s] tunable not compatible with [%s]" % (sysctl[0], host.os))
+
+            # On host (i.e. bare metal, non-jailed processes)
+            for app in template.apps:
+                host.add_application(app[0])
 
         return host
 
@@ -758,6 +761,39 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
+    def add_application(self, template):
+        """Run an application on a host. Enable it."""
+        if isinstance(template, AppTemplate):
+            create = True
+            try:
+                app = OAG_Application((self, template.name), 'by_host_appname')
+                print("Only single stripes supported for baremetal processes, not enabling [%s]" % template.name)
+                create = False
+            except OAGraphRetrieveError:
+                pass
+
+            with OADbTransaction("App Add"):
+                if create:
+                    app =\
+                        OAG_Application().db.create({
+                            'deployment' : None,
+                            'host' : self,
+                            'service' : template.name,
+                            'stripe' : 0,
+                            'affinity' : None,
+                            'cores' : template.cores if template.cores else 0,
+                            'memory' : template.memory if template.memory else 0,
+                            'enabled' : True,
+                        })
+
+                    if template.mounts:
+                        raise OAError("Mounts not supported for baremetal apps")
+        else:
+            raise OAError("AppGroups not yet supported")
+
+        return self
+
+    @friezetxn
     def add_clone_iface(self, name, type_, bridge_components):
         with OADbTransaction("Bridge creation"):
             clone = self.add_iface(name, type_=type_)
@@ -826,11 +862,6 @@ class OAG_Host(OAG_FriezeRoot):
     def block_storage(self):
         return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
-    @property
-    def capabilities(self):
-        self.__set_capability()
-        return self._capabilities[self.fqdn]
-
     def configure(self, targetdir):
         pass
 
@@ -866,27 +897,6 @@ class OAG_Host(OAG_FriezeRoot):
     def slot_factor(self, val):
         self._slot_factor = val
 
-    def __set_capability(self):
-        ccap = {}
-        try:
-            ccap = self._capabilities
-            ccap[self.fqdn]
-        except (AttributeError, KeyError):
-            # _capabilities doesn't exist yet
-            ccap[self.fqdn] = OSCapabilityFactory(self).capabilities
-
-        setattr(self, '_capabilities', ccap)
-
-    def __getitem__(self, indexinfo, preserve_cache=False):
-        super().__getitem__(indexinfo, preserve_cache)
-        self.__set_capability()
-        return self
-
-    def __next__(self):
-        super().__next__()
-        self.__set_capability()
-        return self
-
 class OAG_Sysctls(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
@@ -912,18 +922,36 @@ class OAG_Application(OAG_FriezeRoot):
 
     @staticproperty
     def dbindices(cls): return {
-        'name' : [ ['deployment', 'service'], False, None ],
+        'host_appname' : [ ['host',       'service'], False, None ],
+        'depl_appname' : [ ['deployment', 'service'], False, None ],
     }
 
     @staticproperty
     def streams(cls): return {
-        'deployment' : [ OAG_Deployment, True,  None ],
+        'deployment' : [ OAG_Deployment, False, None ],
         'affinity'   : [ OAG_Site,       False, None ],
+        'host'       : [ OAG_Host,       False, None ],
         'service'    : [ 'text',         str(), None ],
         'stripe'     : [ 'int',          int(), None ],
-        'cores'      : [ 'int',          None,  None ],
-        'memory'     : [ 'int',          None,  None ]
+        'cores'      : [ 'int',          int(), None ],
+        'memory'     : [ 'int',          int(), None ],
+        'enabled'    : [ 'bool',         None,  None ],
     }
+
+    def configure(self):
+        return ConfigFactory(self).cfg.generate()
+
+    def delete(self):
+        self.enabled = None
+        self.db.update()
+
+    def disable(self):
+        self.enabled=False
+        self.db.update()
+
+    def enable(self):
+        self.enabled = True
+        self.db.udpate()
 
     @property
     def fqdn(self):
@@ -953,11 +981,17 @@ class OAG_Deployment(OAG_FriezeRoot):
         """ Where should we put this new application? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If template doesn't specify cores or memory required, just go ahead
-        and put it on the first host with ANY space on it"""
+        and put it on the first host with ANY space on it.
 
+        Also check to make sure that the application can be containerized,
+        and throw if it cannot"""
         if isinstance(template, AppTemplate):
+
+            if not template.jailable:
+                raise OAError("Application [%s] is not jailable and cannot be added to deployment")
+
             try:
-                app = OAG_Application((self, template.name), 'by_name')
+                app = OAG_Application((self, template.name), 'by_depl_appname')
                 stripe_base = app[-1].stripe+1
             except OAGraphRetrieveError:
                 stripe_base = 0
@@ -967,11 +1001,13 @@ class OAG_Deployment(OAG_FriezeRoot):
                     app =\
                         OAG_Application().db.create({
                             'deployment' : self,
+                            'host' : None,
                             'service' : template.name,
                             'stripe' : stripe_base+stripe,
                             'affinity' : affinity,
-                            'cores' : template.cores,
-                            'memory' : template.memory,
+                            'cores' : template.cores if template.cores else 0,
+                            'memory' : template.memory if template.memory else 0,
+                            'enabled' : True,
                         })
 
                     for (mount, size_gb) in template.mounts:
@@ -995,18 +1031,19 @@ class OAG_Deployment(OAG_FriezeRoot):
         return containers
 
 class HostTemplate(object):
-    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[]):
+    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[], apps=[]):
         self.cpus = cpus
         self.memory = memory
         self.bandwidth = bandwidth
         self.interfaces = interfaces
         self.os = os
         self.sysctls = sysctls
+        self.apps = apps
 
 class AppTemplate(object):
     """An application is a composite of its name, resource requirements, mounts,
     network capabilities and internal configurations"""
-    def __init__(self, name, cores=None, memory=None, affinity=None, mounts=[], ports=[], config=[]):
+    def __init__(self, name, cores=None, memory=None, affinity=None, mounts=[], ports=[], config=[], jailable=True):
         self.name = name
         # Resource expectations.
         self.cores  = cores
@@ -1019,6 +1056,8 @@ class AppTemplate(object):
         self.config = config
         # The site in which we would like this app to be run. None for any site.
         self.affinity = affinity
+        # Application can exist inside a jail
+        self.jailable = jailable
 
 ####### Exportable friendly names go here
 
