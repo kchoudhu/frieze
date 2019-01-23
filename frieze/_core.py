@@ -933,7 +933,7 @@ class OAG_Application(OAG_FriezeRoot):
         'host'       : [ OAG_Host,       False, None ],
         'service'    : [ 'text',         str(), None ],
         'stripe'     : [ 'int',          int(), None ],
-        'cores'      : [ 'int',          int(), None ],
+        'cores'      : [ 'float',        int(), None ],
         'memory'     : [ 'int',          int(), None ],
         'enabled'    : [ 'bool',         None,  None ],
     }
