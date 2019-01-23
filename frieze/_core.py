@@ -105,9 +105,9 @@ def friezetxn(fn):
 
                 for depl in self.root_domain.deployment:
                     n_depl = db_clone_with_changes(depl)
-                    if depl.application:
-                        for app in depl.application:
-                            n_app = db_clone_with_changes(app)
+                    if depl.capability:
+                        for cap in depl.capability:
+                            n_cap = db_clone_with_changes(cap)
 
                 for subnet in self.root_domain.subnet:
                     n_subnet = db_clone_with_changes(subnet)
@@ -219,51 +219,51 @@ class OAG_Domain(OAG_FriezeRoot):
 
         # Containers are placed deployment first, site second. Affinity free
         # definitions are placed wherever there is room. If resources are not
-        # available, they are not entered in the app mapping
-        containers = [['application', 'site', 'host']]
-        unplaceable_apps = []
+        # available, they are not entered in the capability mapping
+        containers = [['capability', 'site', 'host']]
+        unplaceable_caps = []
         for depl in self.deployment:
 
-            if depl.application:
-                # Place site specific applications first
-                apps_with_affinity = depl.application.clone().rdf.filter(lambda x: x.affinity is not None)
-                for app in apps_with_affinity:
-                    site_slot_factor = sum([host.slot_factor for hostname, host in resources[app.affinity.shortname].items()])
-                    if site_slot_factor<app.slot_factor:
-                        unplaceable_apps.append((app.affinity.id, app.fqdn))
+            if depl.capability:
+                # Place site specific capabilities first
+                caps_with_affinity = depl.capability.clone().rdf.filter(lambda x: x.affinity is not None)
+                for cap in caps_with_affinity:
+                    site_slot_factor = sum([host.slot_factor for hostname, host in resources[cap.affinity.shortname].items()])
+                    if site_slot_factor<cap.slot_factor:
+                        unplaceable_caps.append((cap.affinity.id, cap.fqdn))
                         continue
 
-                    for hostname, host in resources[app.affinity.shortname].items():
-                        if host.slot_factor-app.slot_factor>=0:
-                            resources[app.affinity.shortname][hostname].slot_factor -= app.slot_factor
-                            containers.append([app.clone(), site.clone(), host.clone()])
+                    for hostname, host in resources[cap.affinity.shortname].items():
+                        if host.slot_factor-cap.slot_factor>=0:
+                            resources[cap.affinity.shortname][hostname].slot_factor -= cap.slot_factor
+                            containers.append([cap.clone(), site.clone(), host.clone()])
                             break
 
                 # Distribute affinity-free resources next
-                apps_without_affinity = depl.application.clone().rdf.filter(lambda x: x.affinity is None)
-                for app in apps_without_affinity:
+                caps_without_affinity = depl.capability.clone().rdf.filter(lambda x: x.affinity is None)
+                for cap in caps_without_affinity:
                     site_loop_break = False
 
                     domain_slot_factor = 0
                     for site, hostinfo in resources.items():
                         domain_slot_factor += sum([host.slot_factor for hostname, host in hostinfo.items()])
-                    if domain_slot_factor<app.slot_factor:
-                        unplaceable_apps.append(('no-affinity', app.fqdn))
+                    if domain_slot_factor<cap.slot_factor:
+                        unplaceable_caps.append(('no-affinity', cap.fqdn))
                         continue
 
                     for site, hostinfo in resources.items():
                         if site_loop_break:
                             break
                         for hostname, host in hostinfo.items():
-                            if host.slot_factor-app.slot_factor>=0:
-                                resources[site][hostname].slot_factor -= app.slot_factor
-                                containers.append([app.clone(), OAG_Site((self, site), 'by_shortname')[0], host.clone()])
+                            if host.slot_factor-cap.slot_factor>=0:
+                                resources[site][hostname].slot_factor -= cap.slot_factor
+                                containers.append([cap.clone(), OAG_Site((self, site), 'by_shortname')[0], host.clone()])
                                 site_loop_break = True
                                 break
 
-        if len(unplaceable_apps)>0:
-            print("Warning: unable to place the following apps:")
-            pprint(unplaceable_apps)
+        if len(unplaceable_caps)>0:
+            print("Warning: unable to place the following caps:")
+            pprint(unplaceable_caps)
 
         return OAG_Container(initprms=containers)
 
@@ -298,7 +298,7 @@ class OAG_Container(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'application' : [ OAG_Application, True,  None ],
+        'capability'  : [ OAG_Capability, True,  None ],
         'site'        : [ OAG_Site,        True,  None ],
         'host'        : [ OAG_Host,        True,  None ],
     }
@@ -309,7 +309,7 @@ class OAG_Container(OAG_FriezeRoot):
 
     @property
     def fqdn(self):
-        return self.application.fqdn
+        return self.capability.fqdn
 
 class Provider(enum.Enum):
     DIGITALOCEAN = 1
@@ -376,8 +376,8 @@ class OAG_Site(OAG_FriezeRoot):
                     print("[%s] tunable not compatible with [%s]" % (sysctl[0], host.os))
 
             # On host (i.e. bare metal, non-jailed processes)
-            for app in template.apps:
-                host.add_application(app[0])
+            for cap in template.caps:
+                host.add_capability(cap[0])
 
         return host
 
@@ -440,15 +440,15 @@ class OAG_Site(OAG_FriezeRoot):
         """Analyzes containers on site and returns an OAG_BlockStore object
         listing block storage devices that need to be provided in order to run
         the site"""
-        store_init = [['container_name', 'appmnt', 'host']]
+        store_init = [['container_name', 'capmnt', 'host']]
         for container in self.containers:
-            for app in container.application:
+            for cap in container.capability:
                 try:
-                    if app.app_required_mount:
-                        for arm in app.app_required_mount:
-                            store_init.append([container.fqdn, arm.clone(), container.host.clone()])
+                    if cap.cap_required_mount:
+                        for crm in cap.cap_required_mount:
+                            store_init.append([container.fqdn, crm.clone(), container.host.clone()])
                 except AttributeError:
-                    # No apps pointed here yet
+                    # No caps pointed here yet
                     pass
 
         return OAG_SysMount() if len(store_init)==1 else OAG_SysMount(initprms=store_init)
@@ -528,17 +528,17 @@ class OAG_SysMount(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'container_name' : [ 'text',   True, None ],
-        'appmnt'         : [ OAG_AppRequiredMount, True, None ],
+        'capmnt'         : [ OAG_CapRequiredMount, True, None ],
         'host'           : [ OAG_Host, True, None ]
     }
 
     @property
     def blockstore_name(self):
-        return "%s:%s:%s" % (self.host.site.shortname, self.container_name, self.appmnt.mount)
+        return "%s:%s:%s" % (self.host.site.shortname, self.container_name, self.capmnt.mount)
 
     @property
     def dataset(self):
-        return "%s/%s" % (self.zpool, self.appmnt.mount)
+        return "%s/%s" % (self.zpool, self.capmnt.mount)
 
     @property
     def default_mountdir(self):
@@ -550,16 +550,16 @@ class OAG_SysMount(OAG_FriezeRoot):
 
     @property
     def zpool(self):
-        return "%s%d" % (self.appmnt.app.service, self.appmnt.app.stripe)
+        return "%s%d" % (self.capmnt.cap.service, self.capmnt.cap.stripe)
 
-class OAG_AppRequiredMount(OAG_FriezeRoot):
+class OAG_CapRequiredMount(OAG_FriezeRoot):
 
     @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
     def streams(cls): return {
-        'app'     : [ OAG_Application, True, None ],
+        'cap'     : [ OAG_Capability, True, None ],
         'mount'   : [ 'text',          True, None ],
         'size_gb' : [ 'int',           True, None ],
     }
@@ -761,12 +761,12 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_application(self, template):
-        """Run an application on a host. Enable it."""
+    def add_capability(self, template):
+        """Run an capability on a host. Enable it."""
         if isinstance(template, AppTemplate):
             create = True
             try:
-                app = OAG_Application((self, template.name), 'by_host_appname')
+                cap = OAG_Capability((self, template.name), 'by_host_capname')
                 print("Only single stripes supported for baremetal processes, not enabling [%s]" % template.name)
                 create = False
             except OAGraphRetrieveError:
@@ -774,8 +774,8 @@ class OAG_Host(OAG_FriezeRoot):
 
             with OADbTransaction("App Add"):
                 if create:
-                    app =\
-                        OAG_Application().db.create({
+                    cap =\
+                        OAG_Capability().db.create({
                             'deployment' : None,
                             'host' : self,
                             'service' : template.name,
@@ -787,7 +787,7 @@ class OAG_Host(OAG_FriezeRoot):
                         })
 
                     if template.mounts:
-                        raise OAError("Mounts not supported for baremetal apps")
+                        raise OAError("Mounts not supported for baremetal caps")
         else:
             raise OAError("AppGroups not yet supported")
 
@@ -914,7 +914,7 @@ class OAG_Sysctls(OAG_FriezeRoot):
         'boot'      : [ 'boolean', True, None ]
     }
 
-class OAG_Application(OAG_FriezeRoot):
+class OAG_Capability(OAG_FriezeRoot):
     """An AppContainer is the running unit of work. """
 
     @staticproperty
@@ -922,8 +922,8 @@ class OAG_Application(OAG_FriezeRoot):
 
     @staticproperty
     def dbindices(cls): return {
-        'host_appname' : [ ['host',       'service'], False, None ],
-        'depl_appname' : [ ['deployment', 'service'], False, None ],
+        'host_capname' : [ ['host',       'service'], False, None ],
+        'depl_capname' : [ ['deployment', 'service'], False, None ],
     }
 
     @staticproperty
@@ -977,13 +977,13 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_application(self, template, affinity=None, stripes=1):
-        """ Where should we put this new application? Loop through all
+    def add_capability(self, template, affinity=None, stripes=1):
+        """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If template doesn't specify cores or memory required, just go ahead
         and put it on the first host with ANY space on it.
 
-        Also check to make sure that the application can be containerized,
+        Also check to make sure that the capability can be containerized,
         and throw if it cannot"""
         if isinstance(template, AppTemplate):
 
@@ -991,15 +991,15 @@ class OAG_Deployment(OAG_FriezeRoot):
                 raise OAError("Application [%s] is not jailable and cannot be added to deployment")
 
             try:
-                app = OAG_Application((self, template.name), 'by_depl_appname')
-                stripe_base = app[-1].stripe+1
+                cap = OAG_Capability((self, template.name), 'by_depl_capname')
+                stripe_base = cap[-1].stripe+1
             except OAGraphRetrieveError:
                 stripe_base = 0
 
             with OADbTransaction("App Add"):
                 for stripe in range(stripes):
-                    app =\
-                        OAG_Application().db.create({
+                    cap =\
+                        OAG_Capability().db.create({
                             'deployment' : self,
                             'host' : None,
                             'service' : template.name,
@@ -1011,9 +1011,9 @@ class OAG_Deployment(OAG_FriezeRoot):
                         })
 
                     for (mount, size_gb) in template.mounts:
-                        appmount =\
-                            OAG_AppRequiredMount().db.create({
-                                'app' : app,
+                        capmount =\
+                            OAG_CapRequiredMount().db.create({
+                                'cap' : cap,
                                 'mount' : mount,
                                 'size_gb' : size_gb,
                             })
@@ -1025,36 +1025,36 @@ class OAG_Deployment(OAG_FriezeRoot):
     @property
     def containers(self):
         containers = {}
-        if self.application:
-            for app in self.application:
-                containers[app.fqdn] = app.clone()
+        if self.capability:
+            for cap in self.capability:
+                containers[cap.fqdn] = cap.clone()
         return containers
 
 class HostTemplate(object):
-    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[], apps=[]):
+    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[], caps=[]):
         self.cpus = cpus
         self.memory = memory
         self.bandwidth = bandwidth
         self.interfaces = interfaces
         self.os = os
         self.sysctls = sysctls
-        self.apps = apps
+        self.caps = caps
 
 class AppTemplate(object):
-    """An application is a composite of its name, resource requirements, mounts,
+    """An capability is a composite of its name, resource requirements, mounts,
     network capabilities and internal configurations"""
     def __init__(self, name, cores=None, memory=None, affinity=None, mounts=[], ports=[], config=[], jailable=True):
         self.name = name
         # Resource expectations.
         self.cores  = cores
         self.memory = memory
-        # Mounts to be fed into the application's container
+        # Mounts to be fed into the capability's container
         self.mounts = mounts
         # Ports to be redirected from outside
         self.ports = ports
         # Config files that need to be set in the container
         self.config = config
-        # The site in which we would like this app to be run. None for any site.
+        # The site in which we would like this cability to be run. None for any site.
         self.affinity = affinity
         # Application can exist inside a jail
         self.jailable = jailable

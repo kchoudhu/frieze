@@ -146,7 +146,7 @@ class VultrShim(CloudInterface):
 
     def block_create(self, blockstore):
         location = self.bin_location(blockstore.host.site.location)
-        rets = self.api.block.create(location, blockstore.appmnt.size_gb, blockstore.blockstore_name)
+        rets = self.api.block.create(location, blockstore.capmnt.size_gb, blockstore.blockstore_name)
         return {
             'vsubid' : rets['SUBID']
         }
