@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'AppTemplate', 'set_domain', 'HostOS', 'Tunable', 'Provider', 'Location']
+__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'CapabilityTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
 
 import collections
 import enum
@@ -18,7 +18,8 @@ from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
 from openarc.env import getenv
 
-from .osinfo import HostOS, Tunable
+from .osinfo import HostOS, Tunable, TunableType, OSFamily
+from .capabilities import ConfigGenFreeBSD, ConfigGenLinux
 
 ####### Database structures, be nice
 
@@ -100,7 +101,7 @@ def friezetxn(fn):
                             n_iface = db_clone_with_changes(iface)
 
                         # Clone tunables
-                        for tunable in host.sysctls:
+                        for tunable in host.sysctl:
                             n_tunable = db_clone_with_changes(tunable)
 
                 for depl in self.root_domain.deployment:
@@ -271,7 +272,7 @@ class OAG_Domain(OAG_FriezeRoot):
 
         if self.is_frozen:
             for site in self.site:
-                site.prepare_infrastructure()
+                # site.prepare_infrastructure()
                 site.configure(push=False)
         else:
             raise OAError("Can't deploy domain that hasn't been snapshotted")
@@ -366,10 +367,10 @@ class OAG_Site(OAG_FriezeRoot):
             # Add tunable parameters
             for sysctl in template.sysctls:
                 if sysctl[0].family == host.os.family:
-                    OAG_Sysctls().db.create({
+                    OAG_Sysctl().db.create({
                         'host' : host,
                         'tunable' : sysctl[0],
-                        'boot' : sysctl[1],
+                        'type' : sysctl[1],
                         'value' : sysctl[2],
                     })
                 else:
@@ -404,15 +405,21 @@ class OAG_Site(OAG_FriezeRoot):
             frieze_dir = os.path.expanduser("~/.frieze")
 
         version_dir = os.path.join(frieze_dir, self.domain.domain, self.domain.version_name)
+
+        # Fresh start: version deployment directory
         version_deploy_dir = os.path.join(version_dir, 'deploy')
+        try:
+            shutil.rmtree(version_deploy_dir)
+        except FileNotFoundError:
+            pass
         os.makedirs(version_deploy_dir, exist_ok=True)
 
         # Create configurations for each host. The configurations contain a
         # full suite of config files,
         for host in self.host:
-            host_cfg_dir = os.path.join(version_dir, host.fqdn)
 
-            # Fresh start
+            # Fresh start: host config directory
+            host_cfg_dir = os.path.join(version_dir, host.fqdn)
             try:
                 shutil.rmtree(host_cfg_dir)
             except FileNotFoundError:
@@ -423,8 +430,8 @@ class OAG_Site(OAG_FriezeRoot):
             host.configure(host_cfg_dir)
 
             # Create deployable tarballs
-            host_tar_file = os.path.join(version_deploy_dir, '%s.tar.gz' % host.fqdn)
-            with tarfile.open(host_tar_file, "w:gz") as tar:
+            host_tar_file = os.path.join(version_deploy_dir, '%s.tar.bz2' % host.fqdn)
+            with tarfile.open(host_tar_file, "w:bz2") as tar:
                 tar.add(host_cfg_dir)
 
             # Use Ansible to compress and deploy manifest to each host
@@ -763,7 +770,7 @@ class OAG_Host(OAG_FriezeRoot):
     @friezetxn
     def add_capability(self, template):
         """Run an capability on a host. Enable it."""
-        if isinstance(template, AppTemplate):
+        if isinstance(template, CapabilityTemplate):
             create = True
             try:
                 cap = OAG_Capability((self, template.name), 'by_host_capname')
@@ -862,8 +869,38 @@ class OAG_Host(OAG_FriezeRoot):
     def block_storage(self):
         return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
+    @property
+    def configprovider(self):
+        return {
+            OSFamily.FreeBSD : ConfigGenFreeBSD,
+            OSFamily.Linux : ConfigGenLinux
+        }[self.os.family]
+
     def configure(self, targetdir):
-        pass
+
+        def dict_merge(dct, merge_dct):
+            for k, v in merge_dct.items():
+                if (k in dct and isinstance(dct[k], dict)
+                        and isinstance(merge_dct[k], collections.Mapping)):
+                    dict_merge(dct[k], merge_dct[k])
+                else:
+                    dct[k] = merge_dct[k]
+
+        # Return this
+        cfg = {}
+
+        # Merge in capability information
+        for cap in self.capability:
+            dict_merge(cfg, self.configprovider(cap).generate())
+
+        # What about those tunables!
+        for tunable in self.sysctl:
+            dict_merge(cfg, self.configprovider(tunable).generate())
+
+        # Niiiiice
+        self.configprovider.emit_output(targetdir, cfg)
+
+        return cfg
 
     @property
     def containers(self):
@@ -897,7 +934,7 @@ class OAG_Host(OAG_FriezeRoot):
     def slot_factor(self, val):
         self._slot_factor = val
 
-class OAG_Sysctls(OAG_FriezeRoot):
+class OAG_Sysctl(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
 
@@ -907,11 +944,11 @@ class OAG_Sysctls(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'host'      : [ OAG_Host,  True, None ],
-        'tunable'   : [ Tunable,   True, None ],
-        'value'     : [ 'text',    True, None ],
+        'host'      : [ OAG_Host,    True, None ],
+        'tunable'   : [ Tunable,     True, None ],
+        'value'     : [ 'text',      True, None ],
         # These tunables are only set at boot time
-        'boot'      : [ 'boolean', True, None ]
+        'type'      : [ TunableType, True, None ]
     }
 
 class OAG_Capability(OAG_FriezeRoot):
@@ -951,7 +988,7 @@ class OAG_Capability(OAG_FriezeRoot):
 
     def enable(self):
         self.enabled = True
-        self.db.udpate()
+        self.db.update()
 
     @property
     def fqdn(self):
@@ -985,7 +1022,7 @@ class OAG_Deployment(OAG_FriezeRoot):
 
         Also check to make sure that the capability can be containerized,
         and throw if it cannot"""
-        if isinstance(template, AppTemplate):
+        if isinstance(template, CapabilityTemplate):
 
             if not template.jailable:
                 raise OAError("Application [%s] is not jailable and cannot be added to deployment")
@@ -1040,7 +1077,7 @@ class HostTemplate(object):
         self.sysctls = sysctls
         self.caps = caps
 
-class AppTemplate(object):
+class CapabilityTemplate(object):
     """An capability is a composite of its name, resource requirements, mounts,
     network capabilities and internal configurations"""
     def __init__(self, name, cores=None, memory=None, affinity=None, mounts=[], ports=[], config=[], jailable=True):
