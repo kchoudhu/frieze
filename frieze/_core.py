@@ -3,10 +3,13 @@
 __all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'CapabilityTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
 
 import collections
+import datetime
 import enum
 import ipaddress
 import os
+import secrets
 import shutil
+import string
 import tarfile
 import toml
 
@@ -130,8 +133,14 @@ class OAG_Domain(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'domain'       : [ 'text',    str(),  None ],
+        'country'      : [ 'text',    str(),  None ],
+        'province'     : [ 'text',    str(),  None ],
+        'locality'     : [ 'text',    str(),  None ],
+        'org'          : [ 'text',    str(),  None ],
+        'org_unit'     : [ 'text',    str(),  None ],
+        'contact'      : [ 'text',    str(),  None ],
         'version_name' : [ 'text',    str(),  None ],
-        'deployed'     : [ 'boolean', bool(), None ]
+        'deployed'     : [ 'boolean', bool(), None ],
     }
 
     @friezetxn
@@ -404,10 +413,10 @@ class OAG_Site(OAG_FriezeRoot):
         if not frieze_dir:
             frieze_dir = os.path.expanduser("~/.frieze")
 
-        version_dir = os.path.join(frieze_dir, self.domain.domain, self.domain.version_name)
+        version_dir = os.path.join(frieze_dir, self.domain.domain, 'deploy', self.domain.version_name)
 
         # Fresh start: version deployment directory
-        version_deploy_dir = os.path.join(version_dir, 'deploy')
+        version_deploy_dir = os.path.join(version_dir, 'dist')
         try:
             shutil.rmtree(version_deploy_dir)
         except FileNotFoundError:
@@ -1112,30 +1121,15 @@ def domain():
     global p_domain
     return p_domain
 
-def set_domain(domain, cfgfile=None):
-    global p_domain
-    gen_domain = False
-
-    if p_domain:
-        if domain==p_domain:
-            return p_domain
-        else:
-            gen_domain = True
-    else:
-        gen_domain = True
-
-    if gen_domain:
-        try:
-            p_domain = OAG_Domain(domain, 'by_domain')[-1]
-        except OAGraphRetrieveError:
-            p_domain =\
-                OAG_Domain().db.create({
-                    'domain' : domain,
-                    'version_name' : str(),
-                    'deployed' : False,
-                })
-
-            p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
+def set_domain(domain,
+               org,
+               country=None,
+               province=None,
+               locality=None,
+               org_unit=None,
+               contact_email=None,
+               cfgfile=None,
+               frieze_dir=None):
 
     # Load configuration
     def get_cfg_file_path():
@@ -1171,5 +1165,187 @@ def set_domain(domain, cfgfile=None):
             getenv().merge_app_cfg(appcfg)
     except IOError:
         raise OAError("%s does not exist" % cfg_file_path)
+
+    # Initialize the domain
+    global p_domain
+    gen_domain = False
+
+    if p_domain:
+        if domain==p_domain:
+            return p_domain
+        else:
+            gen_domain = True
+    else:
+        gen_domain = True
+
+    if gen_domain:
+        try:
+            p_domain = OAG_Domain(domain, 'by_domain')[-1]
+        except OAGraphRetrieveError:
+
+            # Create first entry for the domain
+            p_domain =\
+                OAG_Domain().db.create({
+                    'domain'       : domain,
+                    'country'      : country if country else getenv().rootca['country'],
+                    'province'     : province if province else getenv().rootca['province'],
+                    'locality'     : locality if locality else getenv().rootca['locality'],
+                    'org'          : org,
+                    'org_unit'     : org_unit if org_unit else getenv().rootca['organization_unit'],
+                    'contact'      : contact_email if contact_email else '%s@%s' % (getenv().rootca['contact_email'], domain),
+                    'version_name' : str(),
+                    'deployed'     : False,
+                })
+
+            # Assign a subnet
+            p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
+
+            # Generate a certificate authority
+            def generate_ca():
+                # generate key, signing cert
+                from openarc.oatime import OATime
+                from cryptography import x509
+                from cryptography.x509.oid import NameOID
+                from cryptography.hazmat.backends import default_backend
+                from cryptography.hazmat.primitives import hashes
+                from cryptography.hazmat.primitives import serialization
+                from cryptography.hazmat.primitives.asymmetric import rsa
+
+                # Generate a private key off the bat
+                newca_priv_key =\
+                    rsa.generate_private_key(
+                        public_exponent=65537,
+                        key_size=4096,
+                        backend=default_backend(),
+                    )
+
+                # What are we signing?
+                newca_subject =\
+                    x509.Name([
+                        x509.NameAttribute(NameOID.COUNTRY_NAME, p_domain.country),
+                        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, p_domain.province),
+                        x509.NameAttribute(NameOID.LOCALITY_NAME, p_domain.locality),
+                        x509.NameAttribute(NameOID.ORGANIZATION_NAME, p_domain.org),
+                        x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, p_domain.org_unit),
+                        x509.NameAttribute(NameOID.EMAIL_ADDRESS, p_domain.contact),
+                        x509.NameAttribute(NameOID.COMMON_NAME, "%s Certificate Authority" % p_domain.org),
+                    ])
+
+                # Valid from
+                newca_valid_from = OATime().now
+                newca_valid_until = None
+
+                # Use this to sign the key
+                signing_key = None
+
+                try:
+                    rootca_private_key_file = os.path.expanduser(getenv().rootca['private_key'])
+                    rootca_certificate_file = os.path.expanduser(getenv().rootca['certificate'])
+                except KeyError:
+                    rootca_private_key_file = str()
+                    rootca_certificate_file = str()
+                if os.path.exists(rootca_private_key_file) and os.path.exists(rootca_certificate_file):
+
+                    # User root CA to sign
+                    with open(rootca_private_key_file, 'rb') as f:
+                        rootca_key =\
+                            serialization.load_pem_private_key(
+                                f.read(),
+                                password=getenv().rootca['password'].encode(),
+                                backend=default_backend()
+                            )
+                    with open(rootca_certificate_file, 'rb') as f:
+                        rootca_cert =\
+                            x509.load_pem_x509_certificate(f.read(), default_backend())
+
+                    signing_key = rootca_key
+
+                    # Validity is the lesser of ten years and validity of root
+                    newca_valid_until = newca_valid_from+datetime.timedelta(days=10*365.25)
+                    if newca_valid_until > rootca_cert.not_valid_after:
+                        newca_valid_until = rootca_cert.not_valid_after
+
+                    # In this case we're going to be singing a CSR
+                    csr =\
+                        x509.CertificateSigningRequestBuilder()\
+                            .subject_name(newca_subject)\
+                            .sign(newca_priv_key, hashes.SHA256(), default_backend())
+
+                    signable =\
+                        x509.CertificateBuilder()\
+                            .subject_name(csr.subject)\
+                            .issuer_name(rootca_cert.subject)\
+                            .public_key(csr.public_key())\
+                            .serial_number(x509.random_serial_number())\
+                            .not_valid_before(newca_valid_from)\
+                            .not_valid_after(newca_valid_until)
+                else:
+
+                    # Self signed
+                    signing_key = newca_priv_key
+
+                    # validity is 10 years
+                    newca_valid_until = newca_valid_from+datetime.timedelta(days=10*365.25)
+
+                    signable =\
+                        x509.CertificateBuilder()\
+                            .subject_name(newca_subject)\
+                            .issuer_name(newca_subject)\
+                            .public_key(newca_priv_key.public_key())\
+                            .serial_number(x509.random_serial_number())\
+                            .not_valid_before(newca_valid_from)\
+                            .not_valid_after(newca_valid_until)
+
+                cert = signable.sign(signing_key, hashes.SHA256(), default_backend())
+
+                password=str().join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)).encode()
+
+                if not os.path.exists(ca_dir):
+                    os.makedirs(ca_dir, mode=0o700)
+                os.chmod(ca_dir, 0o700)
+
+                with open(os.open(ca_priv_key_file, os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
+                    f.write(newca_priv_key.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PrivateFormat.TraditionalOpenSSL,
+                        encryption_algorithm=\
+                            serialization.BestAvailableEncryption(password)
+                    ))
+                with open(os.open(ca_pub_crt_file, os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
+                    f.write(cert.public_bytes(serialization.Encoding.PEM))
+                with open(os.open(ca_pub_ssh_file, os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
+                    f.write(newca_priv_key.public_key().public_bytes(
+                                encoding=serialization.Encoding.OpenSSH,
+                                format=serialization.PublicFormat.OpenSSH
+                            ))
+                with open(os.open(ca_pw_file, os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
+                    f.write(password.decode())
+
+                print("New certificate authority created for [%s]. Files:" % p_domain.org)
+                print("   Private Key: [%s]" % ca_priv_key_file)
+                print("   Certificate: [%s]" % ca_pub_crt_file)
+                print("   Password:    [%s]" % ca_pw_file)
+                print("Certificate will remain valid until [%s]" % newca_valid_until)
+
+            # Does it already exist?
+            if not frieze_dir:
+                frieze_dir = '~/.frieze'
+
+            ca_dir = os.path.join(os.path.expanduser(frieze_dir), p_domain.domain, 'ca')
+            ca_pw_file       = os.path.join(ca_dir, 'ca.pw')
+            ca_priv_key_file = os.path.join(ca_dir, 'ca.pem')
+            ca_pub_crt_file  = os.path.join(ca_dir, 'ca_pub.crt')
+            ca_pub_ssh_file  = os.path.join(ca_dir, 'ca_pub.ssh')
+
+            if os.path.exists(ca_dir):
+                if os.path.exists(ca_pw_file)\
+                    and os.path.exists(ca_priv_key_file)\
+                    and os.path.exists(ca_pub_crt_file)\
+                    and os.path.exists(ca_pub_ssh_file):
+                    print("Using existing certificate authority in [%s]" % ca_dir)
+                else:
+                    generate_ca()
+            else:
+                generate_ca()
 
     return p_domain
