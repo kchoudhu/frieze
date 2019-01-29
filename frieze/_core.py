@@ -17,7 +17,7 @@ from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
 
-from .auth import generate_certificate_authority
+from .auth import CertAuth
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
 from .capabilities import ConfigGenFreeBSD, ConfigGenLinux
 
@@ -173,6 +173,13 @@ class OAG_Domain(OAG_FriezeRoot):
 
         return site
 
+    def assign_certificate_authority(self):
+        ca = CertAuth(self)
+        if not ca.is_valid:
+            ca.generate()
+        else:
+            print("Not refreshing certificate authority")
+
     @friezetxn
     def assign_subnet(self, type_, iface=None):
         # Save a subnet for administration
@@ -204,9 +211,6 @@ class OAG_Domain(OAG_FriezeRoot):
                 'router'        : iface.host if iface else None,
                 'routing_iface' : iface,
             })
-
-    def assign_certificate_authority(self, ca_dir):
-        generate_certificate_authority(self, ca_dir)
 
     @oagprop
     def containers(self, **kwargs):
@@ -1197,6 +1201,6 @@ def set_domain(domain,
                 p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
 
                 # Generate a certificate authority
-                p_domain.assign_certificate_authority(operating_directory)
+                p_domain.assign_certificate_authority()
 
     return p_domain
