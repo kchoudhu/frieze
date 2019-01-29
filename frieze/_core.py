@@ -3,13 +3,10 @@
 __all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'CapabilityTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
 
 import collections
-import datetime
 import enum
-import ipaddress
 import os
-import secrets
+import openarc.env
 import shutil
-import string
 import tarfile
 import toml
 
@@ -19,8 +16,8 @@ from openarc import staticproperty, oagprop
 from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
-from openarc.env import getenv
 
+from .auth import generate_certificate_authority
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
 from .capabilities import ConfigGenFreeBSD, ConfigGenLinux
 
@@ -207,6 +204,9 @@ class OAG_Domain(OAG_FriezeRoot):
                 'router'        : iface.host if iface else None,
                 'routing_iface' : iface,
             })
+
+    def assign_certificate_authority(self, ca_dir):
+        generate_certificate_authority(self, ca_dir)
 
     @oagprop
     def containers(self, **kwargs):
@@ -410,10 +410,7 @@ class OAG_Site(OAG_FriezeRoot):
     def configure(self, frieze_dir=None, push=True):
 
         # Decide on directory to output files to
-        if not frieze_dir:
-            frieze_dir = os.path.expanduser("~/.frieze")
-
-        version_dir = os.path.join(frieze_dir, self.domain.domain, 'deploy', self.domain.version_name)
+        version_dir = os.path.join(openarc.env.getenv().runprops['home'], 'domains', self.domain.domain, 'deploy', self.domain.version_name)
 
         # Fresh start: version deployment directory
         version_deploy_dir = os.path.join(version_dir, 'dist')
@@ -1117,10 +1114,6 @@ Deployment = OAG_Deployment
 
 p_domain = None
 
-def domain():
-    global p_domain
-    return p_domain
-
 def set_domain(domain,
                org,
                country=None,
@@ -1128,41 +1121,43 @@ def set_domain(domain,
                locality=None,
                org_unit=None,
                contact_email=None,
-               cfgfile=None,
-               frieze_dir=None):
+               cfgfile=None):
 
-    # Load configuration
-    def get_cfg_file_path():
-        if cfgfile is None:
+    ##### Prepare operating environment
 
-            cfg_name = "frieze"
+    ### Does the operating directory exist?
+    operating_directory = os.path.expanduser('~/.frieze')
+    if not os.path.exists(operating_directory):
+        os.makedirs(operating_directory, mode=0o700)
+    os.chmod(operating_directory, 0o700)
 
-            try:
-                cfg_file_path = "./%s" % cfg_name
-                with open(cfg_file_path, 'r'):
-                    return cfg_file_path
-            except IOError:
-                pass
+    ### Set up the database
+    db_directory = os.path.join(operating_directory, 'db')
+    if not os.path.exists(db_directory):
+        os.makedirs(db_directory, mode=0o700)
+    os.chmod(db_directory, 0o700)
+    # TODO: Boot a special frieze database here
+    # Mount dedicated ZFS dataset at ${FRIEZE}/database
+    # Start pg database instance from ${FRIEZE}/database
+    # Configure openarc to use this db instance
 
-            try:
-                cfg_file_path = os.path.expanduser("~/.%s/%s.conf" % (cfg_name, cfg_name))
-                with open(cfg_file_path, 'r'):
-                    return cfg_file_path
-            except IOError:
-                pass
+    ### Set up config directory
+    cfg_directory = os.path.join(operating_directory, 'cfg')
+    if not os.path.exists(cfg_directory):
+        os.makedirs(cfg_directory, mode=0o700)
+    os.chmod(cfg_directory, 0o700)
 
-            cfg_file_path = "/usr/local/etc/%s.conf" % cfg_name
-        else:
-            cfg_file_path = cfgfile
+    ### Force openarc to use specified config
+    openarc.env.initenv(cfgfile=os.path.join(cfg_directory, 'openarc.toml'), reset=True)
 
-        return cfg_file_path
-
-    cfg_file_path = get_cfg_file_path()
+    cfg_file_path = os.path.join(cfg_directory, 'frieze.conf')
     print("Loading FRIEZE config: [%s]" % (cfg_file_path))
     try:
         with open(cfg_file_path) as f:
             appcfg = toml.loads(f.read())
-            getenv().merge_app_cfg(appcfg)
+            appcfg['runprops'] = { 'home' : operating_directory }
+            openarc.env.getenv().merge_app_cfg(appcfg)
+
     except IOError:
         raise OAError("%s does not exist" % cfg_file_path)
 
@@ -1184,168 +1179,24 @@ def set_domain(domain,
         except OAGraphRetrieveError:
 
             # Create first entry for the domain
-            p_domain =\
-                OAG_Domain().db.create({
-                    'domain'       : domain,
-                    'country'      : country if country else getenv().rootca['country'],
-                    'province'     : province if province else getenv().rootca['province'],
-                    'locality'     : locality if locality else getenv().rootca['locality'],
-                    'org'          : org,
-                    'org_unit'     : org_unit if org_unit else getenv().rootca['organization_unit'],
-                    'contact'      : contact_email if contact_email else '%s@%s' % (getenv().rootca['contact_email'], domain),
-                    'version_name' : str(),
-                    'deployed'     : False,
-                })
+            with OADbTransaction('Create domain: %s' % domain):
+                p_domain =\
+                    OAG_Domain().db.create({
+                        'domain'       : domain,
+                        'country'      : country if country else openarc.env.getenv().rootca['country'],
+                        'province'     : province if province else openarc.env.getenv().rootca['province'],
+                        'locality'     : locality if locality else openarc.env.getenv().rootca['locality'],
+                        'org'          : org,
+                        'org_unit'     : org_unit if org_unit else openarc.env.getenv().rootca['organization_unit'],
+                        'contact'      : contact_email if contact_email else '%s@%s' % (openarc.env.getenv().rootca['contact_email'], domain),
+                        'version_name' : str(),
+                        'deployed'     : False,
+                    })
 
-            # Assign a subnet
-            p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
+                # Assign a subnet
+                p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
 
-            # Generate a certificate authority
-            def generate_ca():
-                # generate key, signing cert
-                from openarc.oatime import OATime
-                from cryptography import x509
-                from cryptography.x509.oid import NameOID
-                from cryptography.hazmat.backends import default_backend
-                from cryptography.hazmat.primitives import hashes
-                from cryptography.hazmat.primitives import serialization
-                from cryptography.hazmat.primitives.asymmetric import rsa
-
-                # Generate a private key off the bat
-                newca_priv_key =\
-                    rsa.generate_private_key(
-                        public_exponent=65537,
-                        key_size=4096,
-                        backend=default_backend(),
-                    )
-
-                # What are we signing?
-                newca_subject =\
-                    x509.Name([
-                        x509.NameAttribute(NameOID.COUNTRY_NAME, p_domain.country),
-                        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, p_domain.province),
-                        x509.NameAttribute(NameOID.LOCALITY_NAME, p_domain.locality),
-                        x509.NameAttribute(NameOID.ORGANIZATION_NAME, p_domain.org),
-                        x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, p_domain.org_unit),
-                        x509.NameAttribute(NameOID.EMAIL_ADDRESS, p_domain.contact),
-                        x509.NameAttribute(NameOID.COMMON_NAME, "%s Certificate Authority" % p_domain.org),
-                    ])
-
-                # Valid from
-                newca_valid_from = OATime().now
-                newca_valid_until = None
-
-                # Use this to sign the key
-                signing_key = None
-
-                try:
-                    rootca_private_key_file = os.path.expanduser(getenv().rootca['private_key'])
-                    rootca_certificate_file = os.path.expanduser(getenv().rootca['certificate'])
-                except KeyError:
-                    rootca_private_key_file = str()
-                    rootca_certificate_file = str()
-                if os.path.exists(rootca_private_key_file) and os.path.exists(rootca_certificate_file):
-
-                    # User root CA to sign
-                    with open(rootca_private_key_file, 'rb') as f:
-                        rootca_key =\
-                            serialization.load_pem_private_key(
-                                f.read(),
-                                password=getenv().rootca['password'].encode(),
-                                backend=default_backend()
-                            )
-                    with open(rootca_certificate_file, 'rb') as f:
-                        rootca_cert =\
-                            x509.load_pem_x509_certificate(f.read(), default_backend())
-
-                    signing_key = rootca_key
-
-                    # Validity is the lesser of ten years and validity of root
-                    newca_valid_until = newca_valid_from+datetime.timedelta(days=10*365.25)
-                    if newca_valid_until > rootca_cert.not_valid_after:
-                        newca_valid_until = rootca_cert.not_valid_after
-
-                    # In this case we're going to be singing a CSR
-                    csr =\
-                        x509.CertificateSigningRequestBuilder()\
-                            .subject_name(newca_subject)\
-                            .sign(newca_priv_key, hashes.SHA256(), default_backend())
-
-                    signable =\
-                        x509.CertificateBuilder()\
-                            .subject_name(csr.subject)\
-                            .issuer_name(rootca_cert.subject)\
-                            .public_key(csr.public_key())\
-                            .serial_number(x509.random_serial_number())\
-                            .not_valid_before(newca_valid_from)\
-                            .not_valid_after(newca_valid_until)
-                else:
-
-                    # Self signed
-                    signing_key = newca_priv_key
-
-                    # validity is 10 years
-                    newca_valid_until = newca_valid_from+datetime.timedelta(days=10*365.25)
-
-                    signable =\
-                        x509.CertificateBuilder()\
-                            .subject_name(newca_subject)\
-                            .issuer_name(newca_subject)\
-                            .public_key(newca_priv_key.public_key())\
-                            .serial_number(x509.random_serial_number())\
-                            .not_valid_before(newca_valid_from)\
-                            .not_valid_after(newca_valid_until)
-
-                cert = signable.sign(signing_key, hashes.SHA256(), default_backend())
-
-                password=str().join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)).encode()
-
-                if not os.path.exists(ca_dir):
-                    os.makedirs(ca_dir, mode=0o700)
-                os.chmod(ca_dir, 0o700)
-
-                with open(os.open(ca_priv_key_file, os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
-                    f.write(newca_priv_key.private_bytes(
-                        encoding=serialization.Encoding.PEM,
-                        format=serialization.PrivateFormat.TraditionalOpenSSL,
-                        encryption_algorithm=\
-                            serialization.BestAvailableEncryption(password)
-                    ))
-                with open(os.open(ca_pub_crt_file, os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
-                    f.write(cert.public_bytes(serialization.Encoding.PEM))
-                with open(os.open(ca_pub_ssh_file, os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
-                    f.write(newca_priv_key.public_key().public_bytes(
-                                encoding=serialization.Encoding.OpenSSH,
-                                format=serialization.PublicFormat.OpenSSH
-                            ))
-                with open(os.open(ca_pw_file, os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
-                    f.write(password.decode())
-
-                print("New certificate authority created for [%s]. Files:" % p_domain.org)
-                print("   Private Key: [%s]" % ca_priv_key_file)
-                print("   Certificate: [%s]" % ca_pub_crt_file)
-                print("   Password:    [%s]" % ca_pw_file)
-                print("Certificate will remain valid until [%s]" % newca_valid_until)
-
-            # Does it already exist?
-            if not frieze_dir:
-                frieze_dir = '~/.frieze'
-
-            ca_dir = os.path.join(os.path.expanduser(frieze_dir), p_domain.domain, 'ca')
-            ca_pw_file       = os.path.join(ca_dir, 'ca.pw')
-            ca_priv_key_file = os.path.join(ca_dir, 'ca.pem')
-            ca_pub_crt_file  = os.path.join(ca_dir, 'ca_pub.crt')
-            ca_pub_ssh_file  = os.path.join(ca_dir, 'ca_pub.ssh')
-
-            if os.path.exists(ca_dir):
-                if os.path.exists(ca_pw_file)\
-                    and os.path.exists(ca_priv_key_file)\
-                    and os.path.exists(ca_pub_crt_file)\
-                    and os.path.exists(ca_pub_ssh_file):
-                    print("Using existing certificate authority in [%s]" % ca_dir)
-                else:
-                    generate_ca()
-            else:
-                generate_ca()
+                # Generate a certificate authority
+                p_domain.assign_certificate_authority(operating_directory)
 
     return p_domain
