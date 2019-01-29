@@ -126,37 +126,6 @@ class CertAuth(object):
         print("Certificate authority will remain valid until [%s]" % newca_valid_until)
 
     @property
-    def rootca_password(self):
-        if self.is_intermediate_ca:
-            return self._rootca_password
-        else:
-            return None
-
-    @property
-    def rootca_privkey(self):
-        if self.is_intermediate_ca:
-            with open(self._rootca_private_key_file, 'rb') as f:
-                rootca_key =\
-                    serialization.load_pem_private_key(
-                        f.read(),
-                        password=self.rootca_password,
-                        backend=default_backend()
-                    )
-            return rootca_key
-        else:
-            return None
-
-    @property
-    def rootca_cert(self):
-        if self.is_intermediate_ca:
-            with open(self._rootca_certificate_file, 'rb') as f:
-                rootca_cert =\
-                    x509.load_pem_x509_certificate(f.read(), default_backend())
-            return rootca_cert
-        else:
-            return None
-
-    @property
     def is_intermediate_ca(self):
         try:
             setattr(self, '_rootca_private_key_file', os.path.expanduser(openarc.env.getenv().rootca['private_key']))
@@ -187,3 +156,35 @@ class CertAuth(object):
     @property
     def root(self):
         return os.path.join(openarc.env.getenv().runprops['home'], 'domains', self.domain.domain, 'ca')
+
+
+    @property
+    def rootca_cert(self):
+        if self.is_intermediate_ca:
+            with open(self._rootca_certificate_file, 'rb') as f:
+                rootca_cert =\
+                    x509.load_pem_x509_certificate(f.read(), default_backend())
+            return rootca_cert
+        else:
+            return None
+
+    @property
+    def rootca_password(self):
+        if self.is_intermediate_ca:
+            return self._rootca_password
+        else:
+            return None
+
+    @property
+    def rootca_privkey(self):
+        if self.is_intermediate_ca:
+            with open(self._rootca_private_key_file, 'rb') as f:
+                rootca_key =\
+                    serialization.load_pem_private_key(
+                        f.read(),
+                        password=self.rootca_password,
+                        backend=default_backend()
+                    )
+            return rootca_key
+        else:
+            return None
