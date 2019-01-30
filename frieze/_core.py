@@ -6,6 +6,7 @@ import collections
 import enum
 import os
 import openarc.env
+import pwd
 import shutil
 import tarfile
 import toml
@@ -174,9 +175,8 @@ class OAG_Domain(OAG_FriezeRoot):
         return site
 
     def assign_certificate_authority(self):
-        ca = CertAuth(self)
-        if not ca.is_valid:
-            ca.generate()
+        if not self.certauthority.is_valid:
+            self.certauthority.generate()
         else:
             print("Not refreshing certificate authority")
 
@@ -211,6 +211,10 @@ class OAG_Domain(OAG_FriezeRoot):
                 'router'        : iface.host if iface else None,
                 'routing_iface' : iface,
             })
+
+    @oagprop
+    def certauthority(self, **kwargs):
+        return CertAuth(self)
 
     @oagprop
     def containers(self, **kwargs):
@@ -286,7 +290,7 @@ class OAG_Domain(OAG_FriezeRoot):
         if self.is_frozen:
             for site in self.site:
                 # site.prepare_infrastructure()
-                site.configure(push=False)
+                site.configure(push=True)
         else:
             raise OAError("Can't deploy domain that hasn't been snapshotted")
 
@@ -411,7 +415,7 @@ class OAG_Site(OAG_FriezeRoot):
         else:
             return None
 
-    def configure(self, frieze_dir=None, push=True):
+    def configure(self, push=True):
 
         # Decide on directory to output files to
         version_dir = os.path.join(openarc.env.getenv().runprops['home'], 'domains', self.domain.domain, 'deploy', self.domain.version_name)
@@ -423,6 +427,12 @@ class OAG_Site(OAG_FriezeRoot):
         except FileNotFoundError:
             pass
         os.makedirs(version_deploy_dir, exist_ok=True)
+
+        # Create new SSH credentials for this deployment if we are pushing
+        if push:
+            user = pwd.getpwuid(os.getuid())[0]
+            command = 'Deploy {%s:%s}' % (self.domain.domain, self.domain.version_name)
+            self.domain.certauthority.issue_ssh_certificate(user, command, serialize_to_dir=os.path.join(version_dir, '.ssh'))
 
         # Create configurations for each host. The configurations contain a
         # full suite of config files,
