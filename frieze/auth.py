@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import enum
 import os
 import openarc.env
 import openarc.exception
@@ -32,6 +33,10 @@ from marshmallow.exceptions import ValidationError
 
 from openarc.oatime import OATime
 
+class CertFormat(enum.Enum):
+    SSH = 1
+    PEM = 2
+
 class CertAuth(object):
     def __init__(self, domain):
 
@@ -44,6 +49,26 @@ class CertAuth(object):
         self.priv_key_file = os.path.join(self.root, 'ca.pem')
         self.pub_crt_file  = os.path.join(self.root, 'ca_pub.crt')
         self.pub_ssh_file  = os.path.join(self.root, 'ca_pub.ssh')
+
+    def certificate(self, certformat=CertFormat.PEM):
+        if certformat == CertFormat.PEM:
+            with open(self.pub_crt_file, 'rb') as f:
+                return f.read().decode()
+        elif certformat == CertFormat.SSH:
+            with open(self.pub_ssh_file, 'r') as f:
+                return f.read()
+
+    def distribute(self):
+        from ._provider import ExtCloud
+
+        # Publish our certificate authority
+        for site in self.domain.site:
+            extcloud = ExtCloud(site.provider)
+            ssh_keys = extcloud.sshkey_list()
+            for key in ssh_keys:
+                extcloud.sshkey_destroy(key)
+            extcloud.sshkey_create(self)
+        return extcloud.sshkey_list()[0]
 
     def generate(self):
 
@@ -273,6 +298,10 @@ class CertAuth(object):
             return (serialized_cert, serialized_privkey)
 
     @property
+    def name(self):
+        return "%s" % self.domain.domain
+
+    @property
     def private_key_password(self):
         with open(self.pw_file, 'r') as f:
             return f.read().encode()
@@ -286,7 +315,6 @@ class CertAuth(object):
     @property
     def root(self):
         return os.path.join(openarc.env.getenv().runprops['home'], 'domains', self.domain.domain, 'ca')
-
 
     @property
     def rootca_cert(self):

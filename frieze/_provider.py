@@ -52,6 +52,15 @@ class CloudInterface(object):
     def snapshot_list(self):
         raise NotImplementedError("Implement in deriving Shim")
 
+    def sshkey_create(self, certauthority):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def sshkey_destroy(self, keyid):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def sshkey_list(self):
+        raise NotImplementedError("Implement in deriving Shim")
+
 class VultrShim(CloudInterface):
 
     class Plan(enum.Enum):
@@ -196,14 +205,15 @@ class VultrShim(CloudInterface):
         filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
-    def server_create(self, host, snapshot=None, label=None):
+    def server_create(self, host, sshkey=None, snapshot=None, label=None):
 
+        sshkey   = sshkey['vsubid']
         snapshot = snapshot['vsubid']
         vpstype  = self.bin_host_plan(host)
         location = self.bin_location(host.site.location)
         osid     = self.bin_os(host.os, snapshot)
 
-        self.api.server.create(location, vpstype, osid, snapshotid=snapshot, label=label)
+        self.api.server.create(location, vpstype, osid, sshid=sshkey, snapshotid=snapshot, label=label)
 
     def server_delete_mark(self, server):
         self.api.server.label_set(server['vsubid'], 'delete:%s' % server['label'])
@@ -222,6 +232,23 @@ class VultrShim(CloudInterface):
     def server_private_network_list(self, subid):
         api_ret = self.api.server.private_network_list(subid)
         return [ k for k, v in ({} if len(api_ret)==0 else api_ret.items())]
+
+    def sshkey_create(self, certauthority):
+        from .auth import CertFormat
+        self.api.sshkey.create(certauthority.name, certauthority.certificate(certformat=CertFormat.SSH))
+
+    def sshkey_destroy(self, key):
+        self.api.sshkey.destroy(key['vsubid'])
+
+    def sshkey_list(self):
+        api_ret = self.api.sshkey.list()
+        rets = [{
+            'vsubid'     : k,
+            'label'      : v['name'],
+            'crdatetime' : v['date_created'],
+            'asset'      : v,
+        } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
+        return sorted(rets, key=lambda x: x['crdatetime'], reverse=True)
 
     def snapshot_list(self):
         api_ret = self.api.snapshot.list()
