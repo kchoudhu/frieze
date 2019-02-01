@@ -1,6 +1,5 @@
 >>/etc/rc.conf
-firstboot_pkgs_list="bash nano ca_root_nss"
->>/etc/rc.conf
+firstboot_pkgs_list="bash nano ca_root_nss opensshd-portable"
 sshd_enable="NO"
 #!touch /etc/rc.conf.local
 >>/etc/rc.conf.local
