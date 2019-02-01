@@ -64,10 +64,9 @@ class CertAuth(object):
         # Publish our certificate authority
         for site in self.domain.site:
             extcloud = ExtCloud(site.provider)
-            ssh_keys = extcloud.sshkey_list()
-            for key in ssh_keys:
+            for key in extcloud.sshkey_list():
                 extcloud.sshkey_destroy(key)
-            extcloud.sshkey_create(self)
+            extcloud.sshkey_create(self.name, self.certificate(certformat=CertFormat.SSH))
         return extcloud.sshkey_list()[0]
 
     def generate(self):

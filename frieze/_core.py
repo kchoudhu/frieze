@@ -18,7 +18,7 @@ from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
 
-from .auth import CertAuth
+from .auth import CertAuth, CertFormat
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
 from .capabilities import ConfigGenFreeBSD, ConfigGenLinux
 
@@ -527,9 +527,19 @@ class OAG_Site(OAG_FriezeRoot):
             extcloud.server_delete_mark(srv)
 
         if self.host.size>0:
+
+            from pkg_resources import resource_string
+            configinit_template =\
+                resource_string('frieze.resources.firstboot', 'configinit').decode()
+
             create_srv = self.host.clone().rdf.filter(lambda x: x.fqdn not in [v['label'] for v in existing_srv])
-            sshkey = extcloud.sshkey_list()[0]
+
+            configinit = configinit_template % self.domain.certauthority.certificate(certformat=CertFormat.SSH)
+            print(configinit)
+            extcloud.metadata_set_user_data(configinit)
             snapshot = extcloud.snapshot_list()[0]
+            sshkey = extcloud.sshkey_list()[0]
+
             for srv in create_srv:
                 extcloud.server_create(srv, sshkey, snapshot, label=srv.fqdn)
 

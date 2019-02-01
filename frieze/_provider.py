@@ -2,6 +2,7 @@
 
 __all__ = ['ExtCloud']
 
+import base64
 import enum
 import vultr
 
@@ -44,6 +45,9 @@ class CloudInterface(object):
         raise NotImplementedError("Implement in deriving Shim")
 
     def server_list(self, show_delete=False):
+        raise NotImplementedError("Implement in deriving Shim")
+
+    def metadata_set_user_data(self, userdata):
         raise NotImplementedError("Implement in deriving Shim")
 
     def server_private_network_list(self):
@@ -177,6 +181,20 @@ class VultrShim(CloudInterface):
         filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
+    def metadata_set_user_data(self, userdata):
+        """Vultr sucks and doesn't have a userdata field so we smuggle the
+        information in on the comment of the ssh key. Yes, the SSH key."""
+        for sshkey in self.sshkey_list():
+            self.sshkey_destroy(sshkey)
+
+        self.sshkey_create(
+            # Use same label
+            sshkey['label'],
+            # Reset SSH key
+            ' '.join(sshkey['asset']['ssh_key'].split(' ')[:2]),
+            # Add in user data as additional_data
+            additional_data=userdata)
+
     def network_attach(self, host, network):
         print("Looking up private network status for [%s]" % host.fqdn)
         v_host = [v_host for v_host in self.server_list() if v_host['label']==host.fqdn][0]
@@ -233,9 +251,10 @@ class VultrShim(CloudInterface):
         api_ret = self.api.server.private_network_list(subid)
         return [ k for k, v in ({} if len(api_ret)==0 else api_ret.items())]
 
-    def sshkey_create(self, certauthority):
-        from .auth import CertFormat
-        self.api.sshkey.create(certauthority.name, certauthority.certificate(certformat=CertFormat.SSH))
+    def sshkey_create(self, name, pubkey, additional_data=None):
+        if additional_data:
+            pubkey += ' %s' % base64.b64encode(additional_data.encode()).decode()
+        self.api.sshkey.create(name, pubkey)
 
     def sshkey_destroy(self, key):
         self.api.sshkey.destroy(key['vsubid'])

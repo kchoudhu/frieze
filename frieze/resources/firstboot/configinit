@@ -1,0 +1,13 @@
+>>/etc/rc.conf
+firstboot_pkgs_list="bash nano ca_root_nss"
+>>/etc/rc.conf
+sshd_enable="NO"
+#!touch /etc/rc.conf.local
+>>/etc/rc.conf.local
+opensshd_enable="YES"
+#!mkdir -p /usr/local/etc/ssh
+>/usr/local/etc/ssh/sshd_config
+TrustedUserCAKeys /usr/local/etc/ssh/ca.pub
+#!touch /usr/local/etc/ssh/ca.pub
+>/usr/local/etc/ssh/ca.pub
+%s
