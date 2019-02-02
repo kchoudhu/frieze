@@ -2,10 +2,13 @@
 
 __all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'CapabilityTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
 
+import base64
 import collections
 import enum
-import os
+import io
 import openarc.env
+import os
+import pkg_resources as pkg
 import pwd
 import shutil
 import tarfile
@@ -491,6 +494,26 @@ class OAG_Site(OAG_FriezeRoot):
         # Prep the external provider
         extcloud = ExtCloud(self.provider)
 
+        # Create your server configinit tarball
+        #
+        # Each configinit command goes in its own archive member ("tarinfo"),
+        # which is then added to the archive ("tarout"), which is then converted
+        # to base64 for decoding by openssl on the server.
+        tarout = io.BytesIO()
+        cfi_raw = pkg.resource_string('frieze.resources.firstboot', 'configinit.payload').decode()
+        cfi_items = ['#!\n'+i[2:] for i in cfi_raw.split('\n') if len(i)>0]
+        with tarfile.open(fileobj=tarout, mode="w") as tar:
+            for i, cfi in enumerate(cfi_items):
+                tarinfo = tarfile.TarInfo(name='{:0>4}.cfg'.format(i))
+
+                payload = io.BytesIO()
+                tarinfo.size = payload.write(cfi.encode())
+                payload.seek(0)
+
+                tar.addfile(tarinfo=tarinfo, fileobj=payload)
+            cfi_push = tarout.getvalue().decode()
+        extcloud.metadata_set_user_data(cfi_push)
+
         # Collect block storage
         needed_bs   = [bs.blockstore_name for bs in self.block_storage]
         existing_bs = extcloud.block_list()
@@ -528,15 +551,7 @@ class OAG_Site(OAG_FriezeRoot):
 
         if self.host.size>0:
 
-            from pkg_resources import resource_string
-            configinit_template =\
-                resource_string('frieze.resources.firstboot', 'configinit').decode()
-
             create_srv = self.host.clone().rdf.filter(lambda x: x.fqdn not in [v['label'] for v in existing_srv])
-
-            configinit = configinit_template % self.domain.certauthority.certificate(certformat=CertFormat.SSH)
-            print(configinit)
-            extcloud.metadata_set_user_data(configinit)
             snapshot = extcloud.snapshot_list()[0]
             sshkey = extcloud.sshkey_list()[0]
 

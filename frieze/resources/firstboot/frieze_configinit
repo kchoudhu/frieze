@@ -1,0 +1,47 @@
+#!/bin/sh
+
+# KEYWORD: firstboot
+# PROVIDE: frieze_configinit
+# REQUIRE: NETWORKING
+# BEFORE: SERVERS frieze_fetchkey firstboot_freebsd_update firstboot_pkgs
+
+# Define frieze_configinit_enable=YES in /etc/rc.conf to enable automatic
+# system configuration from cloud user-data when the system first boots.
+: ${frieze_configinit_enable=NO}
+
+. /etc/rc.subr
+
+name="frieze_configinit"
+rcvar=frieze_configinit_enable
+start_cmd="frieze_configinit_run"
+stop_cmd=":"
+
+CONFIGURL="http://169.254.169.254/v1/public-keys"
+
+frieze_configinit_run()
+{
+	# Download to a temporary location.
+	echo -n "Fetching cloud user-data"
+	CONFFILE=`mktemp "${TMPDIR:-/tmp}/configinit.XXXXXX"`
+	fetch -o - ${CONFIGURL} | awk -F ' ' '{print $3}' | openssl enc -base64 -d -A > ${CONFFILE} 2>/dev/null
+
+	# If we succeeded, process it; otherwise report failure.
+	if [ $? = 0 ]; then
+		# Process the user-data.
+		echo .
+		echo -n "Processing cloud user-data"
+		/usr/local/sbin/configinit $CONFFILE
+		echo .
+	else
+		echo " failed."
+	fi
+
+	# Whether we suceeded or not, delete the temporary file.
+	rm $CONFFILE
+
+	# Signal /etc/rc to reload rc.conf in case it changed.
+	kill -ALRM $$
+}
+
+load_rc_config $name
+run_rc_command "$1"
