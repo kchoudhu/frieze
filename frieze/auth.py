@@ -285,13 +285,16 @@ class CertAuth(object):
                              ).decode()
 
         if serialize_to_dir:
+            serialize_to_dir = os.path.expanduser(serialize_to_dir)
+
             if not os.path.exists(serialize_to_dir):
                 os.makedirs(serialize_to_dir, mode=0o700)
             os.chmod(serialize_to_dir, 0o700)
 
-            with open(os.open(os.path.join(serialize_to_dir, 'id_rsa.pub'), os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
+            id_name = 'id_rsa_%s' % self.domain.domain
+            with open(os.open(os.path.join(serialize_to_dir, '%s.pub' % id_name), os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
                 f.write(serialized_cert)
-            with open(os.open(os.path.join(serialize_to_dir, 'id_rsa'), os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
+            with open(os.open(os.path.join(serialize_to_dir, id_name), os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
                 f.write(serialized_privkey)
         else:
             return (serialized_cert, serialized_privkey)

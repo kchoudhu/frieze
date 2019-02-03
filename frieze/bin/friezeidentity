@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+
+import frieze
+import getpass
+
+def main():
+
+    user = getpass.getuser()
+    domain = '<your domain here>'
+
+    domain = frieze.set_domain(domain, '<your orgname here>')
+
+    domain.certauthority.issue_ssh_certificate(
+        user,
+       'server access',
+        remote_user='root',
+        serialize_to_dir='~/.ssh'
+    )
+
+    print("Issued certificate to [%s] for [%s]" % (user, domain))
+
+if __name__ == '__main__':
+    main()
