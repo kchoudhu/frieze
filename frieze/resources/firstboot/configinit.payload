@@ -2,4 +2,4 @@
 #!sysrc -f /etc/rc.conf sshd_enable="NO"
 #!sysrc -f /etc/rc.conf.local openssh_enable="YES"
 #!mkdir -p /usr/local/etc/ssh
-#!printf 'TrustedUserCAKeys /usr/local/etc/ssh/ca.pub\nPasswordAuthentication no' > /usr/local/etc/ssh/sshd_config
+#!printf 'TrustedUserCAKeys /usr/local/etc/ssh/ca.pub\nPasswordAuthentication no\nChallengeResponseAuthentication no\nPermitRootLogin prohibit-password\n' > /usr/local/etc/ssh/sshd_config
