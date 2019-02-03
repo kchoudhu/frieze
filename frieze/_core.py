@@ -42,6 +42,9 @@ def walk_graph_to_domain(check_node):
         return doamin_found
 
 class OAG_FriezeRoot(OAG_RootNode):
+    @staticproperty
+    def streamable(self): return False
+
     @oagprop
     def root_domain(self, **kwargs):
         return walk_graph_to_domain(self)
