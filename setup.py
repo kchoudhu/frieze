@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(name='frieze',
       version='0.1',
@@ -14,7 +14,7 @@ setup(name='frieze',
       author='Kamil Choudhury',
       author_email='kamil.choudhury@anserinae.net',
       license='BSD',
-      packages=['frieze'],
+      packages=find_packages(),
       install_requires=[
         'openarc',
         'vultr'
