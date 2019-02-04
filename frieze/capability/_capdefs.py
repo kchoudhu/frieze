@@ -8,7 +8,10 @@ __all__ = [
     'zfs',
 ]
 
+from openarc import staticproperty
+
 class CapabilityTemplate(object):
+
     # Resource expectations.
     cores  = None
     memory = None
@@ -23,27 +26,27 @@ class CapabilityTemplate(object):
     # Application can exist inside a jail
     jailable = True
 
+    @staticproperty
+    def name(cls):
+        return cls.__name__
+
 class sshd(CapabilityTemplate):
-    name   = 'sshd'
 
-class zfs(CapabilityTemplate):
-    name   = 'zfs'
+    name   = 'openssh'
 
-class linux(CapabilityTemplate):
-    name   = 'linux'
+class zfs(CapabilityTemplate): pass
+
+class linux(CapabilityTemplate): pass
 
 class nginx(CapabilityTemplate):
-    name   = 'nginx'
     cores  =  0.5
     memory =  512
 
 class openrelayd(CapabilityTemplate):
-    name   = 'openrelayd'
     cores  =  0.25
     memory =  512
 
 class postgres(CapabilityTemplate):
-    name   = 'postgres'
     cores  =  1
     memory =  1024
     mounts = [('wal', 10), ('data', 10), ('extra', 10)]
