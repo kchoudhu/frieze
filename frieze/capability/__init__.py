@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 
-__all__ = [
-    'ConfigFactory'
-]
+from . import _capdefs
 
+from ._capdefs import *
+
+__all__ = ['ConfigGenFreeBSD', 'ConfigGenLinux']
+__all__.extend(_capdefs.__all__)
+
+###### Some other defintiions
 import os
+from ..osinfo import HostOS, OSFamily, TunableType
 
-from openarc import staticproperty
-from .osinfo import HostOS, OSFamily, TunableType
-
-##### Config Factory
 class ConfigGenFreeBSD(object):
     def __init__(self, configurable):
         self.configurable = configurable
 
     def generate(self):
-        from ._core import OAG_Capability, OAG_Sysctl
+        from .._core import OAG_Capability, OAG_Sysctl
 
         def gen_capability_config():
             return {

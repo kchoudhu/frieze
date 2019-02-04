@@ -23,7 +23,7 @@ from openarc.exception import OAGraphRetrieveError, OAError
 
 from .auth import CertAuth, CertFormat
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
-from .capabilities import ConfigGenFreeBSD, ConfigGenLinux
+from .capability import ConfigGenFreeBSD, ConfigGenLinux
 
 ####### Database structures, be nice
 
