@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 
+import argparse
 import frieze
 import getpass
 
-def main():
+def main(args):
 
     user = getpass.getuser()
-    domain = '<your domain here>'
 
-    domain = frieze.set_domain(domain, '<your orgname here>')
+    domain = frieze.set_domain(args.domain, args.organization)
 
     domain.certauthority.issue_ssh_certificate(
         user,
@@ -17,7 +17,13 @@ def main():
         serialize_to_dir='~/.ssh'
     )
 
-    print("Issued certificate to [%s] for [%s]" % (user, domain))
+    print("Issued certificate to [%s] for [%s]" % (user, args.domain))
+
 
 if __name__ == '__main__':
-    main()
+
+    parser = argparse.ArgumentParser(description='Issue an ephemeral SSH key to current user')
+    parser.add_argument('-d', dest='domain', help='domain for which credentials are being requested')
+    parser.add_argument('-o', dest='organization', help='organization within domain')
+
+    main(parser.parse_args())
