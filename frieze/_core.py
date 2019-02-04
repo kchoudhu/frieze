@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'CapabilityTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
+__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
 
 import base64
 import collections
@@ -23,7 +23,7 @@ from openarc.exception import OAGraphRetrieveError, OAError
 
 from .auth import CertAuth, CertFormat
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
-from .capability import ConfigGenFreeBSD, ConfigGenLinux
+from .capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate
 
 ####### Database structures, be nice
 
@@ -841,7 +841,7 @@ class OAG_Host(OAG_FriezeRoot):
     @friezetxn
     def add_capability(self, template):
         """Run an capability on a host. Enable it."""
-        if isinstance(template, CapabilityTemplate):
+        if isinstance(template(), CapabilityTemplate):
             create = True
             try:
                 cap = OAG_Capability((self, template.name), 'by_host_capname')
@@ -1102,7 +1102,7 @@ class OAG_Deployment(OAG_FriezeRoot):
 
         Also check to make sure that the capability can be containerized,
         and throw if it cannot"""
-        if isinstance(template, CapabilityTemplate):
+        if isinstance(template(), CapabilityTemplate):
 
             if not template.jailable:
                 raise OAError("Application [%s] is not jailable and cannot be added to deployment")
@@ -1156,25 +1156,6 @@ class HostTemplate(object):
         self.os = os
         self.sysctls = sysctls
         self.caps = caps
-
-class CapabilityTemplate(object):
-    """An capability is a composite of its name, resource requirements, mounts,
-    network capabilities and internal configurations"""
-    def __init__(self, name, cores=None, memory=None, affinity=None, mounts=[], ports=[], config=[], jailable=True):
-        self.name = name
-        # Resource expectations.
-        self.cores  = cores
-        self.memory = memory
-        # Mounts to be fed into the capability's container
-        self.mounts = mounts
-        # Ports to be redirected from outside
-        self.ports = ports
-        # Config files that need to be set in the container
-        self.config = config
-        # The site in which we would like this cability to be run. None for any site.
-        self.affinity = affinity
-        # Application can exist inside a jail
-        self.jailable = jailable
 
 ####### Exportable friendly names go here
 
