@@ -135,6 +135,9 @@ class OAG_Domain(OAG_FriezeRoot):
     }
 
     @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
     def streams(cls): return {
         'domain'       : [ 'text',    str(),  None ],
         'country'      : [ 'text',    str(),  None ],
@@ -357,6 +360,9 @@ class OAG_Site(OAG_FriezeRoot):
         'name'      : [ ['domain', 'name'],      True, None ],
         'shortname' : [ ['domain', 'shortname'], True, None ],
     }
+
+    @staticproperty
+    def streamable(self): return True
 
     @staticproperty
     def streams(cls): return {
@@ -618,6 +624,9 @@ class OAG_CapRequiredMount(OAG_FriezeRoot):
     def context(cls): return "frieze"
 
     @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
     def streams(cls): return {
         'cap'     : [ OAG_Capability, True, None ],
         'mount'   : [ 'text',          True, None ],
@@ -643,6 +652,9 @@ class OAG_NetIface(OAG_FriezeRoot):
     def dbindices(cls): return {
         'name' : [ ['host', 'name'], True, None ],
     }
+
+    @staticproperty
+    def streamable(self): return True
 
     @staticproperty
     def streams(cls): return {
@@ -771,6 +783,9 @@ class OAG_Subnet(OAG_FriezeRoot):
     }
 
     @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
     def streams(cls): return {
         'domain'        : [ OAG_Domain,   True,  None ],
         'sid'           : [ 'text',       str(), None ],
@@ -808,6 +823,9 @@ class OAG_Host(OAG_FriezeRoot):
     def dbindices(cls): return {
         'name' : [ ['site', 'name'], True, None ],
     }
+
+    @staticproperty
+    def streamable(self): return True
 
     @staticproperty
     def streams(cls): return {
@@ -996,6 +1014,9 @@ class OAG_Sysctl(OAG_FriezeRoot):
     }
 
     @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
     def streams(cls): return {
         'host'      : [ OAG_Host,    True, None ],
         'tunable'   : [ Tunable,     True, None ],
@@ -1015,6 +1036,9 @@ class OAG_Capability(OAG_FriezeRoot):
         'host_capname' : [ ['host',       'service'], False, None ],
         'depl_capname' : [ ['deployment', 'service'], False, None ],
     }
+
+    @staticproperty
+    def streamable(self): return True
 
     @staticproperty
     def streams(cls): return {
@@ -1059,6 +1083,9 @@ class OAG_Deployment(OAG_FriezeRoot):
     def dbindices(cls): return {
         'name' : [ ['domain', 'name'], True, None ],
     }
+
+    @staticproperty
+    def streamable(self): return True
 
     @staticproperty
     def streams(cls): return {
