@@ -945,33 +945,10 @@ class OAG_Host(OAG_FriezeRoot):
         return {
             OSFamily.FreeBSD : ConfigGenFreeBSD,
             OSFamily.Linux : ConfigGenLinux
-        }[self.os.family]
+        }[self.os.family](self)
 
     def configure(self, targetdir):
-
-        def dict_merge(dct, merge_dct):
-            for k, v in merge_dct.items():
-                if (k in dct and isinstance(dct[k], dict)
-                        and isinstance(merge_dct[k], collections.Mapping)):
-                    dict_merge(dct[k], merge_dct[k])
-                else:
-                    dct[k] = merge_dct[k]
-
-        # Return this
-        cfg = {}
-
-        # Merge in capability information
-        for cap in self.capability:
-            dict_merge(cfg, self.configprovider(cap).generate())
-
-        # What about those tunables!
-        for tunable in self.sysctl:
-            dict_merge(cfg, self.configprovider(tunable).generate())
-
-        # Niiiiice
-        self.configprovider.emit_output(targetdir, cfg)
-
-        return cfg
+        self.configprovider.generate().emit_output(targetdir)
 
     @property
     def containers(self):
