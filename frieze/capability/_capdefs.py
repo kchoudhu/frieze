@@ -1,8 +1,10 @@
 __all__ = [
     'CapabilityTemplate',
+    'gateway',
     'linux',
     'nginx',
     'openrelayd',
+    'openssh',
     'postgres',
     'sshd',
     'zfs',
@@ -30,9 +32,11 @@ class CapabilityTemplate(object):
     def name(cls):
         return cls.__name__
 
-class sshd(CapabilityTemplate):
+class gateway(CapabilityTemplate): pass
 
-    name   = 'openssh'
+class sshd(CapabilityTemplate): pass
+
+class openssh(CapabilityTemplate): pass
 
 class zfs(CapabilityTemplate): pass
 
