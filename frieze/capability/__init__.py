@@ -11,6 +11,7 @@ __all__.extend(_capdefs.__all__)
 import collections
 import os
 from ..osinfo import HostOS, OSFamily, TunableType
+from ..hostproperty import HostProperty
 
 class ConfigGenFreeBSD(object):
     def __init__(self, host):
@@ -43,6 +44,13 @@ class ConfigGenFreeBSD(object):
                     None : {},
             }[capability.enabled]}
 
+        def gen_property_config(prop, value):
+            return {
+                '/etc/rc.conf.local' : {
+                    prop.name : value
+                }
+            }
+
         def dict_merge(dct, merge_dct):
             for k, v in merge_dct.items():
                 if (k in dct and isinstance(dct[k], dict)
@@ -50,6 +58,9 @@ class ConfigGenFreeBSD(object):
                     dict_merge(dct[k], merge_dct[k])
                 else:
                     dct[k] = merge_dct[k]
+
+        # Set a hostname
+        dict_merge(self.cfg, gen_property_config(HostProperty.hostname, self.host.fqdn))
 
         # Merge in capability information
         for capability in self.host.capability:
