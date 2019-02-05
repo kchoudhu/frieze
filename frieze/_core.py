@@ -411,7 +411,7 @@ class OAG_Site(OAG_FriezeRoot):
 
             # On host (i.e. bare metal, non-jailed processes)
             for cap in template.caps:
-                host.add_capability(cap[0])
+                host.add_capability(cap[0], default_state=cap[1])
 
         return host
 
@@ -839,7 +839,7 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, template):
+    def add_capability(self, template, default_state=True):
         """Run an capability on a host. Enable it."""
         if isinstance(template(), CapabilityTemplate):
             create = True
@@ -861,7 +861,7 @@ class OAG_Host(OAG_FriezeRoot):
                             'affinity' : None,
                             'cores' : template.cores if template.cores else 0,
                             'memory' : template.memory if template.memory else 0,
-                            'enabled' : True,
+                            'enabled' : default_state,
                         })
 
                     if template.mounts:
@@ -1071,7 +1071,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, template, affinity=None, stripes=1):
+    def add_capability(self, template, default_state=True, affinity=None, stripes=1):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If template doesn't specify cores or memory required, just go ahead
@@ -1101,7 +1101,7 @@ class OAG_Deployment(OAG_FriezeRoot):
                             'affinity' : affinity,
                             'cores' : template.cores if template.cores else 0,
                             'memory' : template.memory if template.memory else 0,
-                            'enabled' : True,
+                            'enabled' : default_state,
                         })
 
                     for (mount, size_gb) in template.mounts:
