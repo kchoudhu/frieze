@@ -18,6 +18,8 @@ BACKEND_PYMODULE_NAME=frieze
 BACKEND_PROJECT_DIR=${SRCDIR}/${BACKEND_PYMODULE_NAME}
 OPENARC_PYMODULE_NAME?=openarc
 OPENARC_PROJECT_DIR?=${SRCDIR}/${OPENARC_PYMODULE_NAME}
+VULTR_PYMODULE_NAME?=vultr
+VULTR_PROJECT_DIR?=${SRCDIR}/python-vultr
 
 # Variables needed to push frieze
 PUSHCREDS=anserinae@anserinae.net
@@ -25,6 +27,7 @@ PUSHDIR=anserinae.net/firstboot
 
 pyclean:
 	-/usr/bin/yes | ${PIP} uninstall ${OPENARC_PYMODULE_NAME}
+	-/usr/bin/yes | ${PIP} uninstall ${VULTR_PYMODULE_NAME}
 	-/usr/bin/yes | ${PIP} uninstall ${BACKEND_PYMODULE_NAME}
 	-rm ${BACKEND_PYMODULE_NAME}/*.pyc
 	-rm ${BACKEND_PYMODULE_NAME}/tests/*.pyc
@@ -32,6 +35,7 @@ pyclean:
 
 pyinit: pyclean
 	${PIP} install ${OPENARC_PROJECT_DIR} --user
+	${PIP} install ${VULTR_PROJECT_DIR} --user
 	${PIP} install ${BACKEND_PROJECT_DIR} --user
 
 push-bootstrap:
