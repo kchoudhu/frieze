@@ -5,6 +5,7 @@ __all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'set
 import base64
 import collections
 import enum
+import gevent
 import io
 import openarc.env
 import os
@@ -549,23 +550,62 @@ class OAG_Site(OAG_FriezeRoot):
             for nw in create_nw:
                 extcloud.network_create(nw)
 
-        # Collect servers, again, taking care to making sure to not create ones
-        # that are already created.
-        needed_srv = [srv.fqdn for srv in self.host]
-        existing_srv = extcloud.server_list()
+        # List all servers that already exist in cloud
+        existing_csrv = extcloud.server_list()
 
-        delete_srv = [esrv for esrv in existing_srv if esrv['label'] not in needed_srv]
+        # ... of which some should be deleted:
+        delete_srv = [esrv for esrv in existing_csrv if esrv['label'] not in [srv.fqdn for srv in self.host]]
         for srv in delete_srv:
             extcloud.server_delete_mark(srv)
 
+        # ... and some should be created:
         if self.host.size>0:
 
-            create_srv = self.host.clone().rdf.filter(lambda x: x.fqdn not in [v['label'] for v in existing_srv])
+            # Update local IP information for servers that already exist in cloud.
+            leave_srv  = self.host.clone().rdf.filter(lambda x: x.fqdn in [v['label'] for v in existing_csrv])
+            for srv in leave_srv:
+                c_srv = [v for v in existing_csrv if v['label']==srv.fqdn][0]
+                srv.db.update({
+                    'ip4'     : c_srv['ip4'],
+                    'gateway' : c_srv['gateway4'],
+                    'netmask' : c_srv['netmask4']
+                })
+
+            # Create new servers based on what isn't already present on cloud provider. Spawn
+            # greenlets to get the job done faster. extcloud.server_create is guaranteed to
+            # wait until network activity is detected from newly created server.
+            create_srv = self.host.clone().rdf.filter(lambda x: x.fqdn not in [v['label'] for v in existing_csrv])
+
+            networks = extcloud.network_list()
             snapshot = extcloud.snapshot_list()[0]
             sshkey = extcloud.sshkey_list()[0]
 
-            for srv in create_srv:
-                extcloud.server_create(srv, sshkey, snapshot, label=srv.fqdn)
+            def blocking_server_create(srv):
+                c_srv = extcloud.server_create(srv, networks=networks, sshkey=sshkey, snapshot=snapshot, label=srv.fqdn)
+                srv.db.update({
+                    'ip4'     : c_srv['ip4'],
+                    'gateway' : c_srv['gateway4'],
+                    'netmask' : c_srv['netmask4']
+                })
+                return True
+
+            glets = []
+            for i, srv in enumerate(create_srv):
+                glets.append(gevent.spawn(blocking_server_create, srv.clone()[i]))
+            gevent.joinall(glets)
+
+            # Update MAC information on network interfaces based on refreshed external cloud list.
+            existing_csrv = extcloud.server_list()
+            for host in self.host:
+
+                c_srv = [c_srv for c_srv in existing_csrv if c_srv['label']==host.fqdn][0]
+                c_srv_networks = extcloud.server_private_network_list(c_srv['vsubid'])
+
+                for i, iface in enumerate(host.physical_ifaces):
+                    if i>0:
+                        iface.db.update({
+                            'mac' : c_srv_networks[i-1]['mac']
+                        })
 
         # Attach block storage to relevant servers. block_attach() keeps track
         # of detaching and attaching storage as necessary if our new config has
@@ -573,15 +613,6 @@ class OAG_Site(OAG_FriezeRoot):
         if self.block_storage.size>0:
             for bs in self.block_storage:
                 extcloud.block_attach(bs)
-
-        if self.host.size>0:
-            networks = extcloud.network_list()
-            for host in self.host:
-                for i, netif in enumerate(host.net_iface.rdf.filter(lambda x: OAG_NetIface.Type(x.type)==OAG_NetIface.Type.PHYSICAL)):
-                    if i==0:
-                        continue
-                    else:
-                        extcloud.network_attach(host, networks[i-1])
 
 class OAG_SysMount(OAG_FriezeRoot):
 
@@ -698,8 +729,11 @@ class OAG_NetIface(OAG_FriezeRoot):
 
     @property
     def broadcast(self):
-        subnet = self.__get_subnet()
-        return subnet.broadcast if subnet else None
+        if self.is_external:
+            return self.host.netmask
+        else:
+            subnet = self.__get_subnet()
+            return subnet.broadcast if subnet else None
 
     @property
     def connected_ifaces(self):
@@ -711,26 +745,29 @@ class OAG_NetIface(OAG_FriezeRoot):
 
     @property
     def gateway(self):
-        subnet = self.__get_subnet()
-        return subnet.gateway if subnet else None
+        if self.is_external:
+            return self.host.gateway
+        else:
+            subnet = self.__get_subnet()
+            return subnet.gateway if subnet else None
 
     @property
     def ip4(self):
 
-
         ret = None
 
-        if not self.is_external:
-
-
-            if self.routingstyle==OAG_NetIface.RoutingStyle.STATIC:
-                # IP address is whatever subnet is attached to this interface
-                subnet = self.__get_subnet()
-                ret = subnet.gateway if subnet else None
-            else:
-                # IP address is determined by alphasort on
-                if self.routed_by:
-                    ret = self.routed_by.connected_ifaces[self.infname]
+        if self.is_external:
+            ret = self.host.ip4
+        else:
+            if not self.is_external:
+                if self.routingstyle==OAG_NetIface.RoutingStyle.STATIC:
+                    # IP address is whatever subnet is attached to this interface
+                    subnet = self.__get_subnet()
+                    ret = subnet.gateway if subnet else None
+                else:
+                    # IP address is determined by alphasort on
+                    if self.routed_by:
+                        ret = self.routed_by.connected_ifaces[self.infname]
 
         return ret
 
@@ -766,6 +803,19 @@ class OAG_NetIface(OAG_FriezeRoot):
             return self.net_iface_vlanhost
         else:
             OAError("Non-physical interfaces can't clone vlans")
+
+    def summarize(self):
+        """Purely informational, shouldn't appear anywhere in production code!"""
+        formatstr = "    %-10s|%-20s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
+        print(formatstr % (
+            self.name,
+            self.routingstyle,
+            self.bird_enabled,
+            self.dhcpd_enabled,
+            self.is_gateway,
+            self.ip4,
+            self.gateway,
+            self.broadcast))
 
 class OAG_Subnet(OAG_FriezeRoot):
     """Subnets are doled out on a per-domain basis and then assigned to
@@ -836,6 +886,9 @@ class OAG_Host(OAG_FriezeRoot):
         'name'      : [ 'text',   True, None ],
         'role'      : [ 'int',    True, None ],
         'os'        : [ HostOS,   True, None ],
+        'ip4'       : [ 'text',   None, None ],
+        'gateway'   : [ 'text',   None, None ],
+        'netmask'   : [ 'text',   None, None ],
     }
 
     @friezetxn
@@ -961,6 +1014,10 @@ class OAG_Host(OAG_FriezeRoot):
     @property
     def internal_ifaces(self):
         return self.net_iface.clone().rdf.filter(lambda x: x.is_external is False)
+
+    @property
+    def physical_ifaces(self):
+        return self.net_iface.clone().rdf.filter(lambda x: OAG_NetIface.Type(x.type)==OAG_NetIface.Type.PHYSICAL)
 
     @property
     def is_bastion(self):

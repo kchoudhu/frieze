@@ -8,3 +8,4 @@ import enum
 
 class HostProperty(enum.Enum):
     hostname      = 1
+    ifconfig      = 2

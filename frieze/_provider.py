@@ -5,6 +5,10 @@ __all__ = ['ExtCloud']
 import base64
 import enum
 import vultr
+import ipaddress
+import time
+import os
+import gevent
 
 from openarc.env import getenv
 
@@ -38,7 +42,7 @@ class CloudInterface(object):
     def network_list(self, show_delete=False):
         raise NotImplementedError("Implement in deriving Shim")
 
-    def server_create(self, host, snapshot=None, label=None):
+    def server_create(self, host, networks=[], snapshot=None, label=None):
         raise NotImplementedError("Implement in deriving Shim")
 
     def server_delete_mark(self, server):
@@ -198,7 +202,7 @@ class VultrShim(CloudInterface):
     def network_attach(self, host, network):
         print("Looking up private network status for [%s]" % host.fqdn)
         v_host = [v_host for v_host in self.server_list() if v_host['label']==host.fqdn][0]
-        v_pnws = self.server_private_network_list(v_host['vsubid'])
+        v_pnws = [pnw['vsubid'] for pnw in self.server_private_network_list(v_host['vsubid'])]
         if network['vsubid'] not in v_pnws:
             print("  Network is currently unattached")
             print("  Making call to attach [%s] to [%s]/[%s]" % (network['vsubid'], v_host['vsubid'], v_host['label']))
@@ -223,33 +227,71 @@ class VultrShim(CloudInterface):
         filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
-    def server_create(self, host, sshkey=None, snapshot=None, label=None):
+    def server_create(self, host, networks=[], sshkey=None, snapshot=None, label=None):
 
+        network  = ','.join([nw['vsubid'] for nw in networks])
         sshkey   = sshkey['vsubid']
         snapshot = snapshot['vsubid']
         vpstype  = self.bin_host_plan(host)
         location = self.bin_location(host.site.location)
         osid     = self.bin_os(host.os, snapshot)
 
-        self.api.server.create(location, vpstype, osid, sshid=sshkey, snapshotid=snapshot, label=label)
+        v_srv_subid = self.api.server.create(location, vpstype, osid, networkid=network, sshid=sshkey, snapshotid=snapshot, label=label)
+
+        v_srv = self.server_list(v_srv_subid['SUBID'])
+
+        def system_up(ip4):
+            # <seanconnery>One ping only</seanconnery>
+            return not os.system("ping -c 1 %s >/dev/null 2>&1" % ip4)
+
+        while ipaddress.ip_address(v_srv['ip4']).is_private:
+            print("[%s] Creation: waiting for IP address" % host.fqdn)
+            gevent.sleep(10)
+            v_srv = self.server_list(v_srv_subid['SUBID'])
+
+        while not system_up(v_srv['ip4']):
+            print("[%s] Creation: Waiting for network response from [%s]" % (host.fqdn, v_srv['ip4']))
+            gevent.sleep(10)
+
+        print("[%s] Creation: Done" % host.fqdn)
+
+        return v_srv
 
     def server_delete_mark(self, server):
         self.api.server.label_set(server['vsubid'], 'delete:%s' % server['label'])
 
     def server_list(self, subid=None, show_delete=False):
         api_ret = self.api.server.list(subid)
-        rets = [{
-            'vsubid'     : k,
-            'label'      : v['label'],
-            'crdatetime' : v['date_created'],
-            'asset'      : v,
-        } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
-        filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
-        return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
+        if subid:
+            return {
+                'vsubid'     : api_ret['SUBID'],
+                'label'      : api_ret['label'],
+                'crdatetime' : api_ret['date_created'],
+                'ip4'        : api_ret['main_ip'],
+                'gateway4'   : api_ret['gateway_v4'],
+                'netmask4'   : api_ret['netmask_v4'],
+                'asset'      : api_ret
+            }
+        else:
+            rets = [{
+                'vsubid'     : k,
+                'label'      : v['label'],
+                'crdatetime' : v['date_created'],
+                'ip4'        : v['main_ip'],
+                'gateway4'   : v['gateway_v4'],
+                'netmask4'   : v['netmask_v4'],
+                'asset'      : v,
+            } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
+            filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
+            return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
 
     def server_private_network_list(self, subid):
         api_ret = self.api.server.private_network_list(subid)
-        return [ k for k, v in ({} if len(api_ret)==0 else api_ret.items())]
+        return [{
+            'vsubid'     : k,
+            'mac'        : v['mac_address'],
+            'asset'      : v,
+        } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
 
     def sshkey_create(self, name, pubkey, additional_data=None):
         if additional_data:

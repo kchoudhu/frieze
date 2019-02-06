@@ -19,7 +19,7 @@ class ConfigGenFreeBSD(object):
         self.cfg  = {}
 
     def generate(self):
-        from .._core import OAG_Capability, OAG_Sysctl
+        from .._core import Netif
 
         def gen_sysctl_config(sysctl):
             (file, knob, value) = {
@@ -44,10 +44,10 @@ class ConfigGenFreeBSD(object):
                     None : {},
             }[capability.enabled]}
 
-        def gen_property_config(prop, value):
+        def gen_property_config(prop, *qualifiers, value=None):
             return {
                 '/etc/rc.conf.local' : {
-                    prop.name : value
+                    '%s_%s' % (prop.name, '_'.join(qualifiers)) : value
                 }
             }
 
@@ -60,7 +60,16 @@ class ConfigGenFreeBSD(object):
                     dct[k] = merge_dct[k]
 
         # Set a hostname
-        dict_merge(self.cfg, gen_property_config(HostProperty.hostname, self.host.fqdn))
+        dict_merge(self.cfg, gen_property_config(HostProperty.hostname, 'star', 'kill', value=self.host.fqdn))
+
+        # Figure out networking
+        for iface in self.host.net_iface:
+            value = {
+                Netif.RoutingStyle.DHCP:   'DHCP',
+                Netif.RoutingStyle.STATIC: 'inet %s netmask %s' % (iface.ip4, iface.broadcast)
+            }[iface.routingstyle]
+
+            dict_merge(self.cfg, gen_property_config(HostProperty.ifconfig, iface.name, value=value))
 
         # Merge in capability information
         for capability in self.host.capability:
