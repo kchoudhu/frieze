@@ -295,16 +295,19 @@ class OAG_Domain(OAG_FriezeRoot):
 
         return OAG_Container(initprms=containers)
 
-    def deploy(self, version_name=str()):
+    def deploy(self, push=True, version_name=str()):
 
         if self.is_frozen:
             # Distribute the cert authority first so that we can link
             # them to the servers that are going to be set up shortly
-            self.certauthority.distribute()
+            if push:
+                self.certauthority.distribute()
 
             for site in self.site:
-                site.prepare_infrastructure()
-                site.configure(push=True)
+                if push:
+                    site.prepare_infrastructure()
+
+                site.configure(push=push)
         else:
             raise OAError("Can't deploy domain that hasn't been snapshotted")
 
