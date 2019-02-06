@@ -10,7 +10,7 @@ __all__.extend(_capdefs.__all__)
 ###### Some other defintiions
 import collections
 import os
-from ..osinfo import HostOS, OSFamily, TunableType
+from ..osinfo import HostOS, OSFamily, TunableType, Tunable
 from ..hostproperty import HostProperty
 
 class ConfigGenFreeBSD(object):
@@ -21,17 +21,17 @@ class ConfigGenFreeBSD(object):
     def generate(self):
         from .._core import Netif
 
-        def gen_sysctl_config(sysctl):
+        def gen_sysctl_config(dbsysctl):
             (file, knob, value) = {
                 TunableType.BOOT    : ('/boot/loader.conf',
-                                        sysctl.tunable,
-                                        sysctl.tunable),
+                                        dbsysctl.tunable.sysctl,
+                                        dbsysctl.value),
                 TunableType.RUNTIME : ('/etc/sysctl.conf',
-                                        sysctl.tunable,
-                                        sysctl.tunable),
+                                        dbsysctl.tunable.sysctl,
+                                        dbsysctl.value),
                 TunableType.KMOD    : ('/boot/loader.conf',
-                                       "%s_load" % sysctl.tunable,
-                                       "YES" if tunable.value=='true' else "NO"),
+                                       "%s_load" % dbsysctl.tunable.sysctl,
+                                       "YES" if dbsysctl.value=='true' else "NO"),
             }[tunable.type]
 
             return { file : { knob : value } }
