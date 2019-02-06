@@ -104,7 +104,7 @@ def friezetxn(fn):
                     for host in site.host:
                         n_host = db_clone_with_changes(host)
 
-                        # Clone ifaces recursively
+                        # Clone interfaces recursively
                         for iface in host.net_iface:
                             n_iface = db_clone_with_changes(iface)
 
@@ -466,7 +466,7 @@ class OAG_Site(OAG_FriezeRoot):
             # Generate host config
             host.configure(host_cfg_dir)
 
-            # Create deployable tarballs
+            # Create deployable archives
             host_tar_file = os.path.join(version_deploy_dir, '%s.tar.bz2' % host.fqdn)
             with tarfile.open(host_tar_file, "w:bz2") as tar:
                 tar.add(host_cfg_dir)
@@ -698,9 +698,9 @@ class OAG_NetIface(OAG_FriezeRoot):
         'wireless'    : [ 'boolean',    True,  None ],
         # Interface is part of a bridge
         'bridge'      : [ OAG_NetIface, False, None ],
-        # Interface is a vlan cloned off vlanhost
+        # Interface is a VLAN cloned off a parent interface
         'vlanhost'    : [ OAG_NetIface, False, None ],
-        # Interface which routes traffic from this iface
+        # Interface which routes traffic from this interface
         'routed_by'   : [ OAG_NetIface, False, None ],
     }
 
@@ -737,6 +737,10 @@ class OAG_NetIface(OAG_FriezeRoot):
 
     @property
     def connected_ifaces(self):
+        """Generate IP addressing map on the fly for a given routing interface.
+
+        Return the map keyed by inferred name for easy lookup by other interfaces
+        trying to learn their IP address. See @property ip4 for example on use."""
         return {nif.infname:'%s.%d' % (self.subnet[-1].sid, i+2) for i, nif in enumerate(self.net_iface_routed_by)}
 
     @property
@@ -761,11 +765,14 @@ class OAG_NetIface(OAG_FriezeRoot):
         else:
             if not self.is_external:
                 if self.routingstyle==OAG_NetIface.RoutingStyle.STATIC:
-                    # IP address is whatever subnet is attached to this interface
+                    # This is an interface responsible for assigning IP addresses
+                    # to other interfaces on the subnet so its IP address is that
+                    # of the subnet it is routing.
                     subnet = self.__get_subnet()
                     ret = subnet.gateway if subnet else None
                 else:
-                    # IP address is determined by alphasort on
+                    # Only assign IP address to routers that are being routed by
+                    # another interface.
                     if self.routed_by:
                         ret = self.routed_by.connected_ifaces[self.infname]
 
@@ -954,7 +961,7 @@ class OAG_Host(OAG_FriezeRoot):
                 })
 
             if type_==OAG_NetIface.Type.VLAN:
-                # Assign vlan to internal interface
+                # Assign VLAN to internal interface
                 iface.vlanhost = self.internal_ifaces[0]
                 iface.db.update()
 
@@ -968,7 +975,7 @@ class OAG_Host(OAG_FriezeRoot):
                     # Add internal routing
                     if self.site.bastion:
                         # We're going to use crude techniques to reroute traffic for
-                        # internial interfaces on compute hosts in sites with a bastion:
+                        # internal interfaces on compute hosts in sites with a bastion:
                         #
                         # The nth internal interface on a compute host is routed by
                         # the nth subnet on the sitebastion.
@@ -984,7 +991,7 @@ class OAG_Host(OAG_FriezeRoot):
                                 except IndexError:
                                     pass
                     else:
-                        # Whatever, there is no internal routing for this setup yet
+                        # There is no internal routing for this setup yet
                         pass
 
         return iface
@@ -1199,7 +1206,7 @@ Domain = OAG_Domain
 Site = OAG_Site
 Deployment = OAG_Deployment
 
-####### User api goes here
+####### User API goes here
 
 p_domain = None
 
