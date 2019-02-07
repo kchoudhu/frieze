@@ -162,6 +162,165 @@ class OAG_FriezeRoot(OAG_RootNode):
     def root_domain(self, **kwargs):
         return walk_graph_to_domain(self)
 
+class OAG_Capability(OAG_FriezeRoot):
+    """An AppContainer is the running unit of work. """
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+        'host_capname' : [ ['host',       'service'], False, None ],
+        'depl_capname' : [ ['deployment', 'service'], False, None ],
+    }
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'deployment' : [ OAG_Deployment, False, None ],
+        'affinity'   : [ OAG_Site,       False, None ],
+        'host'       : [ OAG_Host,       False, None ],
+        'service'    : [ 'text',         str(), None ],
+        'stripe'     : [ 'int',          int(), None ],
+        'cores'      : [ 'float',        int(), None ],
+        'memory'     : [ 'int',          int(), None ],
+        'enabled'    : [ 'bool',         None,  None ],
+    }
+
+    def configure(self):
+        return ConfigFactory(self).cfg.generate()
+
+    def delete(self):
+        self.enabled = None
+        self.db.update()
+
+    def disable(self):
+        self.enabled=False
+        self.db.update()
+
+    def enable(self):
+        self.enabled = True
+        self.db.update()
+
+    @property
+    def fqdn(self):
+        return "%s%d.%s.%s" % (self.service, self.stripe, self.deployment.name, self.deployment.domain.domain)
+
+    @property
+    def slot_factor(self):
+        return (self.cores if self.cores else 0.25) * (self.memory if self.memory else 256)
+
+class OAG_CapRequiredMount(OAG_FriezeRoot):
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'cap'     : [ OAG_Capability, True, None ],
+        'mount'   : [ 'text',          True, None ],
+        'size_gb' : [ 'int',           True, None ],
+    }
+
+class OAG_Container(OAG_FriezeRoot):
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def streamable(cls): return False
+
+    @staticproperty
+    def streams(cls): return {
+        'capability'  : [ OAG_Capability, True,  None ],
+        'site'        : [ OAG_Site,        True,  None ],
+        'host'        : [ OAG_Host,        True,  None ],
+    }
+
+    @property
+    def block_storage(self):
+        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
+
+    @property
+    def fqdn(self):
+        return self.capability.fqdn
+
+class OAG_Deployment(OAG_FriezeRoot):
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+        'name' : [ ['domain', 'name'], True, None ],
+    }
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'domain'   : [ OAG_Domain, True,  None ],
+        'name'     : [ 'text',     True,  None ],
+    }
+
+    @friezetxn
+    def add_capability(self, template, default_state=True, affinity=None, stripes=1):
+        """ Where should we put this new capability? Loop through all
+        hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
+        If template doesn't specify cores or memory required, just go ahead
+        and put it on the first host with ANY space on it.
+
+        Also check to make sure that the capability can be containerized,
+        and throw if it cannot"""
+        if isinstance(template(), CapabilityTemplate):
+
+            if not template.jailable:
+                raise OAError("Application [%s] is not jailable and cannot be added to deployment")
+
+            try:
+                cap = OAG_Capability((self, template.name), 'by_depl_capname')
+                stripe_base = cap[-1].stripe+1
+            except OAGraphRetrieveError:
+                stripe_base = 0
+
+            with OADbTransaction("App Add"):
+                for stripe in range(stripes):
+                    cap =\
+                        OAG_Capability().db.create({
+                            'deployment' : self,
+                            'host' : None,
+                            'service' : template.name,
+                            'stripe' : stripe_base+stripe,
+                            'affinity' : affinity,
+                            'cores' : template.cores if template.cores else 0,
+                            'memory' : template.memory if template.memory else 0,
+                            'enabled' : default_state,
+                        })
+
+                    for (mount, size_gb) in template.mounts:
+                        capmount =\
+                            OAG_CapRequiredMount().db.create({
+                                'cap' : cap,
+                                'mount' : mount,
+                                'size_gb' : size_gb,
+                            })
+        else:
+            raise OAError("AppGroups not yet supported")
+
+        return self
+
+    @property
+    def containers(self):
+        containers = {}
+        if self.capability:
+            for cap in self.capability:
+                containers[cap.fqdn] = cap.clone()
+        return containers
+
 class OAG_Domain(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
@@ -360,27 +519,327 @@ class OAG_Domain(OAG_FriezeRoot):
 
         return self
 
-class OAG_Container(OAG_FriezeRoot):
+class OAG_Host(OAG_FriezeRoot):
+
     @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
-    def streamable(cls): return False
+    def dbindices(cls): return {
+        'name' : [ ['site', 'name'], True, None ],
+    }
+
+    @staticproperty
+    def streamable(self): return True
 
     @staticproperty
     def streams(cls): return {
-        'capability'  : [ OAG_Capability, True,  None ],
-        'site'        : [ OAG_Site,        True,  None ],
-        'host'        : [ OAG_Host,        True,  None ],
+        'site'      : [ OAG_Site, True, None ],
+        'cpus'      : [ 'int',    True, None ],
+        'memory'    : [ 'int',    True, None ],
+        'bandwidth' : [ 'int',    True, None ],
+        'name'      : [ 'text',   True, None ],
+        'role'      : [ HostRole, True, None ],
+        'os'        : [ HostOS,   True, None ],
+        'ip4'       : [ 'text',   None, None ],
+        'gateway'   : [ 'text',   None, None ],
+        'netmask'   : [ 'text',   None, None ],
     }
+
+    @friezetxn
+    def add_capability(self, template, default_state=True):
+        """Run an capability on a host. Enable it."""
+        if isinstance(template(), CapabilityTemplate):
+            create = True
+            try:
+                cap = OAG_Capability((self, template.name), 'by_host_capname')
+                print("Only single stripes supported for baremetal processes, not enabling [%s]" % template.name)
+                create = False
+            except OAGraphRetrieveError:
+                pass
+
+            with OADbTransaction("App Add"):
+                if create:
+                    cap =\
+                        OAG_Capability().db.create({
+                            'deployment' : None,
+                            'host' : self,
+                            'service' : template.name,
+                            'stripe' : 0,
+                            'affinity' : None,
+                            'cores' : template.cores if template.cores else 0,
+                            'memory' : template.memory if template.memory else 0,
+                            'enabled' : default_state,
+                        })
+
+                    if template.mounts:
+                        raise OAError("Mounts not supported for baremetal caps")
+        else:
+            raise OAError("AppGroups not yet supported")
+
+        return self
+
+    @friezetxn
+    def add_clone_iface(self, name, type_, bridge_components):
+        with OADbTransaction("Bridge creation"):
+            clone = self.add_iface(name, type_=type_)
+            for iface in bridge_components:
+                if type_==NetifType.BRIDGE:
+                    iface.bridge = clone
+                    iface.db.update()
+                elif type_==NetifType.VLAN:
+                    clone.vlanhost = iface[-1]
+                    clone.db.update()
+
+        return clone
+
+    @friezetxn
+    def add_iface(self, name, is_external=False, type_=NetifType.PHYSICAL, mac=str(), wireless=False):
+        try:
+            iface = OAG_NetIface((self, name), 'by_name')
+        except OAGraphRetrieveError:
+            iface =\
+                OAG_NetIface().db.create({
+                    'host'        : self,
+                    'name'        : name,
+                    'type'        : type_,
+                    'mac'         : mac,
+                    'is_external' : is_external,
+                    'wireless'    : wireless,
+                })
+
+            if type_==NetifType.VLAN:
+                # Assign VLAN to internal interface
+                iface.vlanhost = self.internal_ifaces[0]
+                iface.db.update()
+
+                # Assign subnet to interface
+                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, iface=iface)
+
+            if not iface.is_external and type_==NetifType.PHYSICAL:
+                if self.is_bastion:
+                    self.site.domain.assign_subnet(SubnetType.SITE, iface=iface)
+                else:
+                    # Add internal routing
+                    if self.site.bastion:
+                        # We're going to use crude techniques to reroute traffic for
+                        # internal interfaces on compute hosts in sites with a bastion:
+                        #
+                        # The nth internal interface on a compute host is routed by
+                        # the nth subnet on the sitebastion.
+                        #
+                        # If the nth subnet is not available on the sitebastion, this
+                        # interface is to be left unrouted.
+                        self.site.db.search()
+                        for host in self.site.compute_hosts:
+                            for i, int_iface in enumerate(host.internal_ifaces):
+                                try:
+                                    int_iface.routed_by = self.site.bastion.routed_subnets[i].routing_iface
+                                    int_iface.db.update()
+                                except IndexError:
+                                    pass
+                    else:
+                        # There is no internal routing for this setup yet
+                        pass
+
+        return iface
 
     @property
     def block_storage(self):
         return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
     @property
+    def configprovider(self):
+        return {
+            OSFamily.FreeBSD : ConfigGenFreeBSD,
+            OSFamily.Linux : ConfigGenLinux
+        }[self.os.family](self)
+
+    def configure(self, targetdir):
+        self.configprovider.generate().emit_output(targetdir)
+
+    @property
+    def containers(self):
+        return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
+
+    @property
     def fqdn(self):
-        return self.capability.fqdn
+        return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
+
+    @property
+    def internal_ifaces(self):
+        return self.net_iface.clone().rdf.filter(lambda x: x.is_external is False)
+
+    @property
+    def physical_ifaces(self):
+        return self.net_iface.clone().rdf.filter(lambda x: x.type==NetifType.PHYSICAL)
+
+    @property
+    def is_bastion(self):
+        return self.role==HostRole.SITEBASTION
+
+    @property
+    def routed_subnets(self):
+        return self.subnet.clone()
+
+    @property
+    def slot_factor(self):
+        try:
+            if self._slot_factor is None:
+                self._slot_factor = self.memory*self.cpus
+        except AttributeError:
+            self._slot_factor = self.memory*self.cpus
+        return self._slot_factor
+    @slot_factor.setter
+    def slot_factor(self, val):
+        self._slot_factor = val
+
+class OAG_NetIface(OAG_FriezeRoot):
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+        'name' : [ ['host', 'name'], True, None ],
+    }
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'host'        : [ OAG_Host,     True,  None ],
+        'name'        : [ 'text',       True,  None ],
+        'type'        : [ NetifType,      True,  None ],
+        'mac'         : [ 'text',       None,  None ],
+        # Is connected to the internet
+        'is_external' : [ 'boolean',    False, None ],
+        'wireless'    : [ 'boolean',    True,  None ],
+        # Interface is part of a bridge
+        'bridge'      : [ OAG_NetIface, False, None ],
+        # Interface is a VLAN cloned off a parent interface
+        'vlanhost'    : [ OAG_NetIface, False, None ],
+        # Interface which routes traffic from this interface
+        'routed_by'   : [ OAG_NetIface, False, None ],
+    }
+
+    @property
+    def bird_enabled(self):
+        return not self.is_external
+
+    @oagprop
+    def bridge_members(self, **kwargs):
+        if self.type==NetifType.BRIDGE:
+            return self.net_iface_bridge
+        else:
+            OAError("Non-bridge interfaces can't have bridge members")
+
+    def __get_subnet(self):
+        if self.routed_by:
+            return self.routed_by.subnet[-1]
+
+        if self.routingstyle==RoutingStyle.STATIC:
+            try:
+                return self.subnet[-1]
+            except TypeError:
+                pass
+
+        return None
+
+    @property
+    def broadcast(self):
+        if self.is_external:
+            return self.host.netmask
+        else:
+            subnet = self.__get_subnet()
+            return subnet.broadcast if subnet else None
+
+    @property
+    def connected_ifaces(self):
+        """Generate IP addressing map on the fly for a given routing interface.
+
+        Return the map keyed by inferred name for easy lookup by other interfaces
+        trying to learn their IP address. See @property ip4 for example on use."""
+        return {nif.infname:'%s.%d' % (self.subnet[-1].sid, i+2) for i, nif in enumerate(self.net_iface_routed_by)}
+
+    @property
+    def dhcpd_enabled(self):
+        return self.host.is_bastion and not self.is_external
+
+    @property
+    def gateway(self):
+        if self.is_external:
+            return self.host.gateway
+        else:
+            subnet = self.__get_subnet()
+            return subnet.gateway if subnet else None
+
+    @property
+    def ip4(self):
+
+        ret = None
+
+        if self.is_external:
+            ret = self.host.ip4
+        else:
+            if not self.is_external:
+                if self.routingstyle==RoutingStyle.STATIC:
+                    # This is an interface responsible for assigning IP addresses
+                    # to other interfaces on the subnet so its IP address is that
+                    # of the subnet it is routing.
+                    subnet = self.__get_subnet()
+                    ret = subnet.gateway if subnet else None
+                else:
+                    # Only assign IP address to routers that are being routed by
+                    # another interface.
+                    if self.routed_by:
+                        ret = self.routed_by.connected_ifaces[self.infname]
+
+        return ret
+
+    @property
+    def is_gateway(self):
+        return self.gateway is None
+
+    @property
+    def routingstyle(self):
+        if self.is_external:
+            return RoutingStyle.DHCP
+        else:
+            if self.host.site.bastion:
+                if self.host.is_bastion:
+                    return RoutingStyle.STATIC
+                else:
+                    if self.type==NetifType.PHYSICAL:
+                        return RoutingStyle.DHCP
+                    else:
+                        return RoutingStyle.STATIC
+            else:
+                return RoutingStyle.UNROUTED
+
+    @oagprop
+    def vlans(self, **kwargs):
+        if self.type==NetifType.PHYSICAL:
+            return self.net_iface_vlanhost
+        else:
+            OAError("Non-physical interfaces can't clone vlans")
+
+    @staticproperty
+    def formatstr(self): return "    %-10s|%-23s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
+
+    def summarize(self):
+        """Purely informational, shouldn't appear anywhere in production code!"""
+
+        print(self.formatstr % (
+            self.name,
+            self.routingstyle,
+            self.bird_enabled,
+            self.dhcpd_enabled,
+            self.is_gateway,
+            self.ip4,
+            self.gateway,
+            self.broadcast))
 
 class OAG_Site(OAG_FriezeRoot):
     @staticproperty
@@ -644,203 +1103,6 @@ class OAG_Site(OAG_FriezeRoot):
             for bs in self.block_storage:
                 extcloud.block_attach(bs)
 
-class OAG_SysMount(OAG_FriezeRoot):
-
-    @staticproperty
-    def context(cls): return "frieze"
-
-    @staticproperty
-    def streamable(cls): return False
-
-    @staticproperty
-    def streams(cls): return {
-        'container_name' : [ 'text',   True, None ],
-        'capmnt'         : [ OAG_CapRequiredMount, True, None ],
-        'host'           : [ OAG_Host, True, None ]
-    }
-
-    @property
-    def blockstore_name(self):
-        return "%s:%s:%s" % (self.host.site.shortname, self.container_name, self.capmnt.mount)
-
-    @property
-    def dataset(self):
-        return "%s/%s" % (self.zpool, self.capmnt.mount)
-
-    @property
-    def default_mountdir(self):
-        return '/mnt'
-
-    @property
-    def mount_pount(self):
-        return "%s/%s" % (self.default_mountdir, self.dataset)
-
-    @property
-    def zpool(self):
-        return "%s%d" % (self.capmnt.cap.service, self.capmnt.cap.stripe)
-
-class OAG_CapRequiredMount(OAG_FriezeRoot):
-
-    @staticproperty
-    def context(cls): return "frieze"
-
-    @staticproperty
-    def streamable(self): return True
-
-    @staticproperty
-    def streams(cls): return {
-        'cap'     : [ OAG_Capability, True, None ],
-        'mount'   : [ 'text',          True, None ],
-        'size_gb' : [ 'int',           True, None ],
-    }
-
-class OAG_NetIface(OAG_FriezeRoot):
-
-    @staticproperty
-    def context(cls): return "frieze"
-
-    @staticproperty
-    def dbindices(cls): return {
-        'name' : [ ['host', 'name'], True, None ],
-    }
-
-    @staticproperty
-    def streamable(self): return True
-
-    @staticproperty
-    def streams(cls): return {
-        'host'        : [ OAG_Host,     True,  None ],
-        'name'        : [ 'text',       True,  None ],
-        'type'        : [ NetifType,      True,  None ],
-        'mac'         : [ 'text',       None,  None ],
-        # Is connected to the internet
-        'is_external' : [ 'boolean',    False, None ],
-        'wireless'    : [ 'boolean',    True,  None ],
-        # Interface is part of a bridge
-        'bridge'      : [ OAG_NetIface, False, None ],
-        # Interface is a VLAN cloned off a parent interface
-        'vlanhost'    : [ OAG_NetIface, False, None ],
-        # Interface which routes traffic from this interface
-        'routed_by'   : [ OAG_NetIface, False, None ],
-    }
-
-    @property
-    def bird_enabled(self):
-        return not self.is_external
-
-    @oagprop
-    def bridge_members(self, **kwargs):
-        if self.type==NetifType.BRIDGE:
-            return self.net_iface_bridge
-        else:
-            OAError("Non-bridge interfaces can't have bridge members")
-
-    def __get_subnet(self):
-        if self.routed_by:
-            return self.routed_by.subnet[-1]
-
-        if self.routingstyle==RoutingStyle.STATIC:
-            try:
-                return self.subnet[-1]
-            except TypeError:
-                pass
-
-        return None
-
-    @property
-    def broadcast(self):
-        if self.is_external:
-            return self.host.netmask
-        else:
-            subnet = self.__get_subnet()
-            return subnet.broadcast if subnet else None
-
-    @property
-    def connected_ifaces(self):
-        """Generate IP addressing map on the fly for a given routing interface.
-
-        Return the map keyed by inferred name for easy lookup by other interfaces
-        trying to learn their IP address. See @property ip4 for example on use."""
-        return {nif.infname:'%s.%d' % (self.subnet[-1].sid, i+2) for i, nif in enumerate(self.net_iface_routed_by)}
-
-    @property
-    def dhcpd_enabled(self):
-        return self.host.is_bastion and not self.is_external
-
-    @property
-    def gateway(self):
-        if self.is_external:
-            return self.host.gateway
-        else:
-            subnet = self.__get_subnet()
-            return subnet.gateway if subnet else None
-
-    @property
-    def ip4(self):
-
-        ret = None
-
-        if self.is_external:
-            ret = self.host.ip4
-        else:
-            if not self.is_external:
-                if self.routingstyle==RoutingStyle.STATIC:
-                    # This is an interface responsible for assigning IP addresses
-                    # to other interfaces on the subnet so its IP address is that
-                    # of the subnet it is routing.
-                    subnet = self.__get_subnet()
-                    ret = subnet.gateway if subnet else None
-                else:
-                    # Only assign IP address to routers that are being routed by
-                    # another interface.
-                    if self.routed_by:
-                        ret = self.routed_by.connected_ifaces[self.infname]
-
-        return ret
-
-    @property
-    def is_gateway(self):
-        return self.gateway is None
-
-    @property
-    def routingstyle(self):
-        if self.is_external:
-            return RoutingStyle.DHCP
-        else:
-            if self.host.site.bastion:
-                if self.host.is_bastion:
-                    return RoutingStyle.STATIC
-                else:
-                    if self.type==NetifType.PHYSICAL:
-                        return RoutingStyle.DHCP
-                    else:
-                        return RoutingStyle.STATIC
-            else:
-                return RoutingStyle.UNROUTED
-
-    @oagprop
-    def vlans(self, **kwargs):
-        if self.type==NetifType.PHYSICAL:
-            return self.net_iface_vlanhost
-        else:
-            OAError("Non-physical interfaces can't clone vlans")
-
-    @staticproperty
-    def formatstr(self): return "    %-10s|%-23s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
-
-    def summarize(self):
-        """Purely informational, shouldn't appear anywhere in production code!"""
-
-        print(self.formatstr % (
-            self.name,
-            self.routingstyle,
-            self.bird_enabled,
-            self.dhcpd_enabled,
-            self.is_gateway,
-            self.ip4,
-            self.gateway,
-            self.broadcast))
-
 class OAG_Subnet(OAG_FriezeRoot):
     """Subnets are doled out on a per-domain basis and then assigned to
     assigned to a site."""
@@ -877,181 +1139,6 @@ class OAG_Subnet(OAG_FriezeRoot):
     def gateway(self):
         return "%s.1"  % self.sid
 
-class OAG_Host(OAG_FriezeRoot):
-
-    @staticproperty
-    def context(cls): return "frieze"
-
-    @staticproperty
-    def dbindices(cls): return {
-        'name' : [ ['site', 'name'], True, None ],
-    }
-
-    @staticproperty
-    def streamable(self): return True
-
-    @staticproperty
-    def streams(cls): return {
-        'site'      : [ OAG_Site, True, None ],
-        'cpus'      : [ 'int',    True, None ],
-        'memory'    : [ 'int',    True, None ],
-        'bandwidth' : [ 'int',    True, None ],
-        'name'      : [ 'text',   True, None ],
-        'role'      : [ HostRole, True, None ],
-        'os'        : [ HostOS,   True, None ],
-        'ip4'       : [ 'text',   None, None ],
-        'gateway'   : [ 'text',   None, None ],
-        'netmask'   : [ 'text',   None, None ],
-    }
-
-    @friezetxn
-    def add_capability(self, template, default_state=True):
-        """Run an capability on a host. Enable it."""
-        if isinstance(template(), CapabilityTemplate):
-            create = True
-            try:
-                cap = OAG_Capability((self, template.name), 'by_host_capname')
-                print("Only single stripes supported for baremetal processes, not enabling [%s]" % template.name)
-                create = False
-            except OAGraphRetrieveError:
-                pass
-
-            with OADbTransaction("App Add"):
-                if create:
-                    cap =\
-                        OAG_Capability().db.create({
-                            'deployment' : None,
-                            'host' : self,
-                            'service' : template.name,
-                            'stripe' : 0,
-                            'affinity' : None,
-                            'cores' : template.cores if template.cores else 0,
-                            'memory' : template.memory if template.memory else 0,
-                            'enabled' : default_state,
-                        })
-
-                    if template.mounts:
-                        raise OAError("Mounts not supported for baremetal caps")
-        else:
-            raise OAError("AppGroups not yet supported")
-
-        return self
-
-    @friezetxn
-    def add_clone_iface(self, name, type_, bridge_components):
-        with OADbTransaction("Bridge creation"):
-            clone = self.add_iface(name, type_=type_)
-            for iface in bridge_components:
-                if type_==NetifType.BRIDGE:
-                    iface.bridge = clone
-                    iface.db.update()
-                elif type_==NetifType.VLAN:
-                    clone.vlanhost = iface[-1]
-                    clone.db.update()
-
-        return clone
-
-    @friezetxn
-    def add_iface(self, name, is_external=False, type_=NetifType.PHYSICAL, mac=str(), wireless=False):
-        try:
-            iface = OAG_NetIface((self, name), 'by_name')
-        except OAGraphRetrieveError:
-            iface =\
-                OAG_NetIface().db.create({
-                    'host'        : self,
-                    'name'        : name,
-                    'type'        : type_,
-                    'mac'         : mac,
-                    'is_external' : is_external,
-                    'wireless'    : wireless,
-                })
-
-            if type_==NetifType.VLAN:
-                # Assign VLAN to internal interface
-                iface.vlanhost = self.internal_ifaces[0]
-                iface.db.update()
-
-                # Assign subnet to interface
-                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, iface=iface)
-
-            if not iface.is_external and type_==NetifType.PHYSICAL:
-                if self.is_bastion:
-                    self.site.domain.assign_subnet(SubnetType.SITE, iface=iface)
-                else:
-                    # Add internal routing
-                    if self.site.bastion:
-                        # We're going to use crude techniques to reroute traffic for
-                        # internal interfaces on compute hosts in sites with a bastion:
-                        #
-                        # The nth internal interface on a compute host is routed by
-                        # the nth subnet on the sitebastion.
-                        #
-                        # If the nth subnet is not available on the sitebastion, this
-                        # interface is to be left unrouted.
-                        self.site.db.search()
-                        for host in self.site.compute_hosts:
-                            for i, int_iface in enumerate(host.internal_ifaces):
-                                try:
-                                    int_iface.routed_by = self.site.bastion.routed_subnets[i].routing_iface
-                                    int_iface.db.update()
-                                except IndexError:
-                                    pass
-                    else:
-                        # There is no internal routing for this setup yet
-                        pass
-
-        return iface
-
-    @property
-    def block_storage(self):
-        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
-
-    @property
-    def configprovider(self):
-        return {
-            OSFamily.FreeBSD : ConfigGenFreeBSD,
-            OSFamily.Linux : ConfigGenLinux
-        }[self.os.family](self)
-
-    def configure(self, targetdir):
-        self.configprovider.generate().emit_output(targetdir)
-
-    @property
-    def containers(self):
-        return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
-
-    @property
-    def fqdn(self):
-        return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
-
-    @property
-    def internal_ifaces(self):
-        return self.net_iface.clone().rdf.filter(lambda x: x.is_external is False)
-
-    @property
-    def physical_ifaces(self):
-        return self.net_iface.clone().rdf.filter(lambda x: x.type==NetifType.PHYSICAL)
-
-    @property
-    def is_bastion(self):
-        return self.role==HostRole.SITEBASTION
-
-    @property
-    def routed_subnets(self):
-        return self.subnet.clone()
-
-    @property
-    def slot_factor(self):
-        try:
-            if self._slot_factor is None:
-                self._slot_factor = self.memory*self.cpus
-        except AttributeError:
-            self._slot_factor = self.memory*self.cpus
-        return self._slot_factor
-    @slot_factor.setter
-    def slot_factor(self, val):
-        self._slot_factor = val
-
 class OAG_Sysctl(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
@@ -1072,127 +1159,40 @@ class OAG_Sysctl(OAG_FriezeRoot):
         'type'      : [ TunableType, True, None ]
     }
 
-class OAG_Capability(OAG_FriezeRoot):
-    """An AppContainer is the running unit of work. """
+class OAG_SysMount(OAG_FriezeRoot):
 
     @staticproperty
     def context(cls): return "frieze"
 
     @staticproperty
-    def dbindices(cls): return {
-        'host_capname' : [ ['host',       'service'], False, None ],
-        'depl_capname' : [ ['deployment', 'service'], False, None ],
-    }
-
-    @staticproperty
-    def streamable(self): return True
+    def streamable(cls): return False
 
     @staticproperty
     def streams(cls): return {
-        'deployment' : [ OAG_Deployment, False, None ],
-        'affinity'   : [ OAG_Site,       False, None ],
-        'host'       : [ OAG_Host,       False, None ],
-        'service'    : [ 'text',         str(), None ],
-        'stripe'     : [ 'int',          int(), None ],
-        'cores'      : [ 'float',        int(), None ],
-        'memory'     : [ 'int',          int(), None ],
-        'enabled'    : [ 'bool',         None,  None ],
+        'container_name' : [ 'text',   True, None ],
+        'capmnt'         : [ OAG_CapRequiredMount, True, None ],
+        'host'           : [ OAG_Host, True, None ]
     }
 
-    def configure(self):
-        return ConfigFactory(self).cfg.generate()
-
-    def delete(self):
-        self.enabled = None
-        self.db.update()
-
-    def disable(self):
-        self.enabled=False
-        self.db.update()
-
-    def enable(self):
-        self.enabled = True
-        self.db.update()
+    @property
+    def blockstore_name(self):
+        return "%s:%s:%s" % (self.host.site.shortname, self.container_name, self.capmnt.mount)
 
     @property
-    def fqdn(self):
-        return "%s%d.%s.%s" % (self.service, self.stripe, self.deployment.name, self.deployment.domain.domain)
+    def dataset(self):
+        return "%s/%s" % (self.zpool, self.capmnt.mount)
 
     @property
-    def slot_factor(self):
-        return (self.cores if self.cores else 0.25) * (self.memory if self.memory else 256)
-
-class OAG_Deployment(OAG_FriezeRoot):
-    @staticproperty
-    def context(cls): return "frieze"
-
-    @staticproperty
-    def dbindices(cls): return {
-        'name' : [ ['domain', 'name'], True, None ],
-    }
-
-    @staticproperty
-    def streamable(self): return True
-
-    @staticproperty
-    def streams(cls): return {
-        'domain'   : [ OAG_Domain, True,  None ],
-        'name'     : [ 'text',     True,  None ],
-    }
-
-    @friezetxn
-    def add_capability(self, template, default_state=True, affinity=None, stripes=1):
-        """ Where should we put this new capability? Loop through all
-        hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
-        If template doesn't specify cores or memory required, just go ahead
-        and put it on the first host with ANY space on it.
-
-        Also check to make sure that the capability can be containerized,
-        and throw if it cannot"""
-        if isinstance(template(), CapabilityTemplate):
-
-            if not template.jailable:
-                raise OAError("Application [%s] is not jailable and cannot be added to deployment")
-
-            try:
-                cap = OAG_Capability((self, template.name), 'by_depl_capname')
-                stripe_base = cap[-1].stripe+1
-            except OAGraphRetrieveError:
-                stripe_base = 0
-
-            with OADbTransaction("App Add"):
-                for stripe in range(stripes):
-                    cap =\
-                        OAG_Capability().db.create({
-                            'deployment' : self,
-                            'host' : None,
-                            'service' : template.name,
-                            'stripe' : stripe_base+stripe,
-                            'affinity' : affinity,
-                            'cores' : template.cores if template.cores else 0,
-                            'memory' : template.memory if template.memory else 0,
-                            'enabled' : default_state,
-                        })
-
-                    for (mount, size_gb) in template.mounts:
-                        capmount =\
-                            OAG_CapRequiredMount().db.create({
-                                'cap' : cap,
-                                'mount' : mount,
-                                'size_gb' : size_gb,
-                            })
-        else:
-            raise OAError("AppGroups not yet supported")
-
-        return self
+    def default_mountdir(self):
+        return '/mnt'
 
     @property
-    def containers(self):
-        containers = {}
-        if self.capability:
-            for cap in self.capability:
-                containers[cap.fqdn] = cap.clone()
-        return containers
+    def mount_pount(self):
+        return "%s/%s" % (self.default_mountdir, self.dataset)
+
+    @property
+    def zpool(self):
+        return "%s%d" % (self.capmnt.cap.service, self.capmnt.cap.stripe)
 
 class HostTemplate(object):
     def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[], caps=[]):
