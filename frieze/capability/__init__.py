@@ -7,7 +7,7 @@ from ._capdefs import *
 __all__ = ['ConfigGenFreeBSD', 'ConfigGenLinux']
 __all__.extend(_capdefs.__all__)
 
-###### Some other defintiions
+###### Some other definitions
 import collections
 import os
 from ..osinfo import HostOS, OSFamily, TunableType, Tunable
@@ -19,7 +19,7 @@ class ConfigGenFreeBSD(object):
         self.cfg  = {}
 
     def generate(self):
-        from .._core import Netif
+        from .._core import RoutingStyle
 
         def gen_sysctl_config(dbsysctl):
             (file, knob, value) = {
@@ -60,13 +60,13 @@ class ConfigGenFreeBSD(object):
                     dct[k] = merge_dct[k]
 
         # Set a hostname
-        dict_merge(self.cfg, gen_property_config(HostProperty.hostname, 'star', 'kill', value=self.host.fqdn))
+        dict_merge(self.cfg, gen_property_config(HostProperty.hostname, value=self.host.fqdn))
 
-        # Figure out networking
+        # Networking
         for iface in self.host.net_iface:
             value = {
-                Netif.RoutingStyle.DHCP:   'DHCP',
-                Netif.RoutingStyle.STATIC: 'inet %s netmask %s' % (iface.ip4, iface.broadcast)
+                RoutingStyle.DHCP:   'DHCP',
+                RoutingStyle.STATIC: 'inet %s netmask %s' % (iface.ip4, iface.broadcast)
             }[iface.routingstyle]
 
             dict_merge(self.cfg, gen_property_config(HostProperty.ifconfig, iface.name, value=value))

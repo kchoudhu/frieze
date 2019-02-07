@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'Deployment', 'Netif', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
+__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
 
 import base64
 import collections
@@ -26,7 +26,7 @@ from .auth import CertAuth, CertFormat
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
 from .capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate
 
-####### Database structures, be nice
+#### Helper functions
 
 def walk_graph_to_domain(check_node):
     if check_node.__class__ == OAG_Domain:
@@ -41,14 +41,6 @@ def walk_graph_to_domain(check_node):
                     if domain_found:
                         return domain_found
         return doamin_found
-
-class OAG_FriezeRoot(OAG_RootNode):
-    @staticproperty
-    def streamable(self): return False
-
-    @oagprop
-    def root_domain(self, **kwargs):
-        return walk_graph_to_domain(self)
 
 def friezetxn(fn):
 
@@ -126,6 +118,50 @@ def friezetxn(fn):
         return fn(self, *args, **kwargs)
     return wrapfn
 
+#### Some enums
+
+class HostRole(enum.Enum):
+    SITEROUTER   = 1
+    SITEBASTION  = 2
+    COMPUTE      = 3
+    STORAGE      = 4
+
+class Location(enum.Enum):
+    NY           = 1
+    LONDON       = 2
+
+class NetifType(enum.Enum):
+    PHYSICAL    = 1
+    OVPN_SERVER = 2
+    OVPN_CLIENT = 3
+    VLAN        = 4
+    BRIDGE      = 5
+
+class Provider(enum.Enum):
+    DIGITALOCEAN = 1
+    VULTR        = 2
+    DC           = 3
+
+class RoutingStyle(enum.Enum):
+    DHCP        = 1
+    STATIC      = 2
+    UNROUTED    = 3
+
+class SubnetType(enum.Enum):
+    ROUTING     = 1
+    SITE        = 2
+    DEPLOYMENT  = 3
+
+#### Database structures
+
+class OAG_FriezeRoot(OAG_RootNode):
+    @staticproperty
+    def streamable(self): return False
+
+    @oagprop
+    def root_domain(self, **kwargs):
+        return walk_graph_to_domain(self)
+
 class OAG_Domain(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
@@ -164,7 +200,7 @@ class OAG_Domain(OAG_FriezeRoot):
 
             for site in self.site:
                 for host in site.host:
-                    host.add_iface('vlan%d' % depl.id, type_=OAG_NetIface.Type.VLAN)
+                    host.add_iface('vlan%d' % depl.id, type_=NetifType.VLAN)
 
         return depl
 
@@ -193,17 +229,17 @@ class OAG_Domain(OAG_FriezeRoot):
     @friezetxn
     def assign_subnet(self, type_, iface=None):
         # Save a subnet for administration
-        if type_==OAG_Subnet.Type.ROUTING:
+        if type_==SubnetType.ROUTING:
             sid = '172.16.0'
-        elif type_==OAG_Subnet.Type.SITE:
-            site_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.SITE)
+        elif type_==SubnetType.SITE:
+            site_subnets = self.subnet.rdf.filter(lambda x: x.type==SubnetType.SITE)
 
             if site_subnets.size==0:
                 sid = '172.16.1'
             else:
                 sid = '172.16.%d' % (int(site_subnets[-1].sid.split('.')[-1])+1)
         else:
-            depl_subnets = self.subnet.rdf.filter(lambda x: OAG_Subnet.Type(x.type)==OAG_Subnet.Type.DEPLOYMENT)
+            depl_subnets = self.subnet.rdf.filter(lambda x: x.type==SubnetType.DEPLOYMENT)
 
             if depl_subnets.size==0:
                 sid = '10.0.0'
@@ -346,15 +382,6 @@ class OAG_Container(OAG_FriezeRoot):
     def fqdn(self):
         return self.capability.fqdn
 
-class Provider(enum.Enum):
-    DIGITALOCEAN = 1
-    VULTR        = 2
-    DC           = 3
-
-class Location(enum.Enum):
-    NY           = 1
-    LONDON       = 2
-
 class OAG_Site(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
@@ -390,7 +417,7 @@ class OAG_Site(OAG_FriezeRoot):
                     'memory' : template.memory,
                     'bandwidth' : template.bandwidth,
                     'name' : name,
-                    'role' : role.value,
+                    'role' : role,
                     'os' : template.os
                 })
 
@@ -668,16 +695,6 @@ class OAG_CapRequiredMount(OAG_FriezeRoot):
     }
 
 class OAG_NetIface(OAG_FriezeRoot):
-    class Type(enum.Enum):
-        PHYSICAL    = 1
-        OVPN_SERVER = 2
-        OVPN_CLIENT = 3
-        VLAN        = 4
-        BRIDGE      = 5
-
-    class RoutingStyle(enum.Enum):
-        DHCP   = 1
-        STATIC = 2
 
     @staticproperty
     def context(cls): return "frieze"
@@ -694,8 +711,8 @@ class OAG_NetIface(OAG_FriezeRoot):
     def streams(cls): return {
         'host'        : [ OAG_Host,     True,  None ],
         'name'        : [ 'text',       True,  None ],
-        'type'        : [ 'int',        False, None ],
-        'mac'         : [ 'text',       False, None ],
+        'type'        : [ NetifType,      True,  None ],
+        'mac'         : [ 'text',       None,  None ],
         # Is connected to the internet
         'is_external' : [ 'boolean',    False, None ],
         'wireless'    : [ 'boolean',    True,  None ],
@@ -713,7 +730,7 @@ class OAG_NetIface(OAG_FriezeRoot):
 
     @oagprop
     def bridge_members(self, **kwargs):
-        if self.type==self.Type.BRIDGE.value:
+        if self.type==NetifType.BRIDGE:
             return self.net_iface_bridge
         else:
             OAError("Non-bridge interfaces can't have bridge members")
@@ -722,7 +739,7 @@ class OAG_NetIface(OAG_FriezeRoot):
         if self.routed_by:
             return self.routed_by.subnet[-1]
 
-        if self.routingstyle==self.RoutingStyle.STATIC:
+        if self.routingstyle==RoutingStyle.STATIC:
             try:
                 return self.subnet[-1]
             except TypeError:
@@ -767,7 +784,7 @@ class OAG_NetIface(OAG_FriezeRoot):
             ret = self.host.ip4
         else:
             if not self.is_external:
-                if self.routingstyle==OAG_NetIface.RoutingStyle.STATIC:
+                if self.routingstyle==RoutingStyle.STATIC:
                     # This is an interface responsible for assigning IP addresses
                     # to other interfaces on the subnet so its IP address is that
                     # of the subnet it is routing.
@@ -787,37 +804,34 @@ class OAG_NetIface(OAG_FriezeRoot):
 
     @property
     def routingstyle(self):
-        if self.host.site.bastion:
-            if self.host.is_bastion:
-                if self.is_external:
-                    return self.RoutingStyle.DHCP
-                else:
-                    return self.RoutingStyle.STATIC
-            else:
-                if self.is_external:
-                    return self.RoutingStyle.STATIC
-                else:
-                    if OAG_NetIface.Type(self.type)==OAG_NetIface.Type.PHYSICAL:
-                        return self.RoutingStyle.DHCP
-                    else:
-                        return self.RoutingStyle.STATIC
+        if self.is_external:
+            return RoutingStyle.DHCP
         else:
-            if self.is_external:
-                return self.RoutingStyle.DHCP
+            if self.host.site.bastion:
+                if self.host.is_bastion:
+                    return RoutingStyle.STATIC
+                else:
+                    if self.type==NetifType.PHYSICAL:
+                        return RoutingStyle.DHCP
+                    else:
+                        return RoutingStyle.STATIC
             else:
-                return self.RoutingStyle.STATIC
+                return RoutingStyle.UNROUTED
 
     @oagprop
     def vlans(self, **kwargs):
-        if self.type==self.Type.PHYSICAL.value:
+        if self.type==NetifType.PHYSICAL:
             return self.net_iface_vlanhost
         else:
             OAError("Non-physical interfaces can't clone vlans")
 
+    @staticproperty
+    def formatstr(self): return "    %-10s|%-23s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
+
     def summarize(self):
         """Purely informational, shouldn't appear anywhere in production code!"""
-        formatstr = "    %-10s|%-20s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
-        print(formatstr % (
+
+        print(self.formatstr % (
             self.name,
             self.routingstyle,
             self.bird_enabled,
@@ -830,11 +844,6 @@ class OAG_NetIface(OAG_FriezeRoot):
 class OAG_Subnet(OAG_FriezeRoot):
     """Subnets are doled out on a per-domain basis and then assigned to
     assigned to a site."""
-    class Type(enum.Enum):
-        ROUTING    = 1
-        SITE       = 2
-        DEPLOYMENT = 3
-
     @staticproperty
     def context(cls): return "frieze"
 
@@ -851,7 +860,7 @@ class OAG_Subnet(OAG_FriezeRoot):
         'sid'           : [ 'text',       str(), None ],
         'mask'          : [ 'int',        int(), None ],
         # what is this subnet used for?
-        'type'          : [ 'int',        int(), None ],
+        'type'          : [ SubnetType,   True,  None ],
         'router'        : [ OAG_Host,     False, None ],
         'routing_iface' : [ OAG_NetIface, False, None ]
     }
@@ -869,12 +878,6 @@ class OAG_Subnet(OAG_FriezeRoot):
         return "%s.1"  % self.sid
 
 class OAG_Host(OAG_FriezeRoot):
-
-    class Role(enum.Enum):
-        SITEROUTER   = 1
-        SITEBASTION  = 2
-        COMPUTE      = 3
-        STORAGE      = 4
 
     @staticproperty
     def context(cls): return "frieze"
@@ -894,7 +897,7 @@ class OAG_Host(OAG_FriezeRoot):
         'memory'    : [ 'int',    True, None ],
         'bandwidth' : [ 'int',    True, None ],
         'name'      : [ 'text',   True, None ],
-        'role'      : [ 'int',    True, None ],
+        'role'      : [ HostRole, True, None ],
         'os'        : [ HostOS,   True, None ],
         'ip4'       : [ 'text',   None, None ],
         'gateway'   : [ 'text',   None, None ],
@@ -939,17 +942,17 @@ class OAG_Host(OAG_FriezeRoot):
         with OADbTransaction("Bridge creation"):
             clone = self.add_iface(name, type_=type_)
             for iface in bridge_components:
-                if type_==OAG_NetIface.Type.BRIDGE:
+                if type_==NetifType.BRIDGE:
                     iface.bridge = clone
                     iface.db.update()
-                elif type_==OAG_NetIface.Type.VLAN:
+                elif type_==NetifType.VLAN:
                     clone.vlanhost = iface[-1]
                     clone.db.update()
 
         return clone
 
     @friezetxn
-    def add_iface(self, name, is_external=False, type_=OAG_NetIface.Type.PHYSICAL, mac=str(), wireless=False):
+    def add_iface(self, name, is_external=False, type_=NetifType.PHYSICAL, mac=str(), wireless=False):
         try:
             iface = OAG_NetIface((self, name), 'by_name')
         except OAGraphRetrieveError:
@@ -957,23 +960,23 @@ class OAG_Host(OAG_FriezeRoot):
                 OAG_NetIface().db.create({
                     'host'        : self,
                     'name'        : name,
-                    'type'        : type_.value,
+                    'type'        : type_,
                     'mac'         : mac,
                     'is_external' : is_external,
                     'wireless'    : wireless,
                 })
 
-            if type_==OAG_NetIface.Type.VLAN:
+            if type_==NetifType.VLAN:
                 # Assign VLAN to internal interface
                 iface.vlanhost = self.internal_ifaces[0]
                 iface.db.update()
 
                 # Assign subnet to interface
-                self.site.domain.assign_subnet(OAG_Subnet.Type.DEPLOYMENT, iface=iface)
+                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, iface=iface)
 
-            if not iface.is_external and type_==OAG_NetIface.Type.PHYSICAL:
+            if not iface.is_external and type_==NetifType.PHYSICAL:
                 if self.is_bastion:
-                    self.site.domain.assign_subnet(OAG_Subnet.Type.SITE, iface=iface)
+                    self.site.domain.assign_subnet(SubnetType.SITE, iface=iface)
                 else:
                     # Add internal routing
                     if self.site.bastion:
@@ -1027,11 +1030,11 @@ class OAG_Host(OAG_FriezeRoot):
 
     @property
     def physical_ifaces(self):
-        return self.net_iface.clone().rdf.filter(lambda x: OAG_NetIface.Type(x.type)==OAG_NetIface.Type.PHYSICAL)
+        return self.net_iface.clone().rdf.filter(lambda x: x.type==NetifType.PHYSICAL)
 
     @property
     def is_bastion(self):
-        return OAG_Host.Role(self.role)==OAG_Host.Role.SITEBASTION
+        return self.role==HostRole.SITEBASTION
 
     @property
     def routed_subnets(self):
@@ -1293,7 +1296,7 @@ def set_domain(domain,
                     })
 
                 # Assign a subnet
-                p_domain.assign_subnet(OAG_Subnet.Type.ROUTING)
+                p_domain.assign_subnet(SubnetType.ROUTING)
 
                 # Generate a certificate authority
                 p_domain.assign_certificate_authority()
