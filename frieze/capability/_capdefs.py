@@ -32,13 +32,9 @@ class CapabilityTemplate(object):
     def name(cls):
         return cls.__name__
 
+## Service definitions
+
 class gateway(CapabilityTemplate): pass
-
-class sshd(CapabilityTemplate): pass
-
-class openssh(CapabilityTemplate): pass
-
-class zfs(CapabilityTemplate): pass
 
 class linux(CapabilityTemplate): pass
 
@@ -50,7 +46,13 @@ class openrelayd(CapabilityTemplate):
     cores  =  0.25
     memory =  512
 
+class openssh(CapabilityTemplate): pass
+
 class postgres(CapabilityTemplate):
     cores  =  1
     memory =  1024
     mounts = [('wal', 10), ('data', 10), ('extra', 10)]
+
+class sshd(CapabilityTemplate): pass
+
+class zfs(CapabilityTemplate): pass
