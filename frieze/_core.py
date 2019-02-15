@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location']
+__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB']
 
 import base64
 import collections
@@ -24,7 +24,7 @@ from openarc.exception import OAGraphRetrieveError, OAError
 
 from .auth import CertAuth, CertFormat
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
-from .capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate
+from .capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc
 
 #### Helper functions
 
@@ -119,6 +119,9 @@ def friezetxn(fn):
     return wrapfn
 
 #### Some enums
+class FIB(enum.Enum):
+    DEFAULT     = 0
+    WORLD       = 1
 
 class HostRole(enum.Enum):
     SITEROUTER   = 1
@@ -163,7 +166,7 @@ class OAG_FriezeRoot(OAG_RootNode):
         return walk_graph_to_domain(self)
 
 class OAG_Capability(OAG_FriezeRoot):
-    """An AppContainer is the running unit of work. """
+    """A capability is the running unit of work which is monitored and logged"""
 
     @staticproperty
     def context(cls): return "frieze"
@@ -186,22 +189,23 @@ class OAG_Capability(OAG_FriezeRoot):
         'stripe'     : [ 'int',          int(), None ],
         'cores'      : [ 'float',        int(), None ],
         'memory'     : [ 'int',          int(), None ],
-        'enabled'    : [ 'bool',         None,  None ],
+        'start_rc'   : [ 'bool',         False, None ],
+        'start_local': [ 'bool',         False, None ],
+        'start_local_prms':
+                       [ 'text',         None,  None ],
+        'fib'        : [ FIB,            True,  None ],
     }
 
-    def configure(self):
-        return ConfigFactory(self).cfg.generate()
-
-    def delete(self):
-        self.enabled = None
+    def rc_delete(self):
+        self.start_rc = None
         self.db.update()
 
-    def disable(self):
-        self.enabled=False
+    def rc_disable(self):
+        self.start_rc =False
         self.db.update()
 
-    def enable(self):
-        self.enabled = True
+    def rc_enable(self):
+        self.start_rc = True
         self.db.update()
 
     @property
@@ -268,7 +272,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, template, default_state=True, affinity=None, stripes=1):
+    def add_capability(self, template, enable_state=True, affinity=None, stripes=1):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If template doesn't specify cores or memory required, just go ahead
@@ -298,7 +302,11 @@ class OAG_Deployment(OAG_FriezeRoot):
                             'affinity' : affinity,
                             'cores' : template.cores if template.cores else 0,
                             'memory' : template.memory if template.memory else 0,
-                            'enabled' : default_state,
+                            'start_rc' : enable_state,
+                            'start_local' : False,
+                            # OK to set FIB.DEFAULT: containerized capabilities
+                            # are always on the default (internal) routing table
+                            'fib' : FIB.DEFAULT,
                         })
 
                     for (mount, size_gb) in template.mounts:
@@ -359,7 +367,7 @@ class OAG_Domain(OAG_FriezeRoot):
 
             for site in self.site:
                 for host in site.host:
-                    host.add_iface('vlan%d' % depl.id, type_=NetifType.VLAN)
+                    host.add_iface('vlan%d' % depl.id, False, hostiface=host.internal_ifaces[0], type_=NetifType.VLAN)
 
         return depl
 
@@ -547,13 +555,12 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, template, default_state=True):
+    def add_capability(self, template, enable_state=None, fib=FIB.DEFAULT):
         """Run an capability on a host. Enable it."""
         if isinstance(template(), CapabilityTemplate):
             create = True
             try:
                 cap = OAG_Capability((self, template.name), 'by_host_capname')
-                print("Only single stripes supported for baremetal processes, not enabling [%s]" % template.name)
                 create = False
             except OAGraphRetrieveError:
                 pass
@@ -569,7 +576,9 @@ class OAG_Host(OAG_FriezeRoot):
                             'affinity' : None,
                             'cores' : template.cores if template.cores else 0,
                             'memory' : template.memory if template.memory else 0,
-                            'enabled' : default_state,
+                            'start_rc' : enable_state,
+                            'start_local' : False,
+                            'fib' : fib,
                         })
 
                     if template.mounts:
@@ -580,67 +589,91 @@ class OAG_Host(OAG_FriezeRoot):
         return self
 
     @friezetxn
-    def add_clone_iface(self, name, type_, bridge_components):
-        with OADbTransaction("Bridge creation"):
-            clone = self.add_iface(name, type_=type_)
-            for iface in bridge_components:
-                if type_==NetifType.BRIDGE:
-                    iface.bridge = clone
-                    iface.db.update()
-                elif type_==NetifType.VLAN:
-                    clone.vlanhost = iface[-1]
-                    clone.db.update()
+    def add_iface(self, name, is_external, fib=FIB.DEFAULT, hostiface=None, type_=NetifType.PHYSICAL, mac=str(), wireless=False):
 
-        return clone
-
-    @friezetxn
-    def add_iface(self, name, is_external=False, type_=NetifType.PHYSICAL, mac=str(), wireless=False):
         try:
             iface = OAG_NetIface((self, name), 'by_name')
         except OAGraphRetrieveError:
             iface =\
-                OAG_NetIface().db.create({
+                OAG_NetIface(initprms={
                     'host'        : self,
                     'name'        : name,
                     'type'        : type_,
                     'mac'         : mac,
+                    'fib'         : fib,
                     'is_external' : is_external,
                     'wireless'    : wireless,
                 })
 
+            # If it's a VLAN, fib is the same is the host interface
             if type_==NetifType.VLAN:
-                # Assign VLAN to internal interface
-                iface.vlanhost = self.internal_ifaces[0]
-                iface.db.update()
+                if not hostiface:
+                    raise OAError("Need a parent interface to associate VLAN with")
+                if hostiface.fib != fib:
+                    raise OAError("Parent interface has different fib from given one")
+                if hostiface.is_external:
+                    raise OAError("Can't put a VLAN on an external interface")
 
-                # Assign subnet to interface
+                iface.fib      = hostiface.fib
+                iface.vlanhost = hostiface
+
+            # See if this interface is being routed by another interface
+            if type_==NetifType.PHYSICAL and not self.is_bastion and not iface.is_external:
+                iface.routed_by = self.site.bastion.routed_subnets[self.internal_ifaces.size].routing_iface
+
+            iface.db.create()
+
+            self.db.search()
+
+            # Don't forget the second order effects:
+            # 1. Rerouting traffic if adding internal interface on bastion
+            if iface.type==NetifType.PHYSICAL and self.is_bastion and not iface.is_external:
+                if self.site.compute_hosts:
+                    for host in self.site.compute_hosts:
+                        for i, int_iface in enumerate(host.internal_ifaces):
+                            try:
+                                int_iface.routed_by = self.site.bastion.routed_subnets[i].routing_iface
+                                int_iface.fib = FIB.DEFAULT
+                                int_iface.db.update()
+                            except IndexError:
+                                raise OAError("Unable to find corresponding internal routing interface")
+                self.site.domain.assign_subnet(SubnetType.SITE, iface=iface)
+
+            # 2. Assign subnets to VLAN that is being created
+            if iface.type==NetifType.VLAN:
                 self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, iface=iface)
 
-            if not iface.is_external and type_==NetifType.PHYSICAL:
-                if self.is_bastion:
-                    self.site.domain.assign_subnet(SubnetType.SITE, iface=iface)
-                else:
-                    # Add internal routing
-                    if self.site.bastion:
-                        # We're going to use crude techniques to reroute traffic for
-                        # internal interfaces on compute hosts in sites with a bastion:
-                        #
-                        # The nth internal interface on a compute host is routed by
-                        # the nth subnet on the sitebastion.
-                        #
-                        # If the nth subnet is not available on the sitebastion, this
-                        # interface is to be left unrouted.
-                        self.site.db.search()
-                        for host in self.site.compute_hosts:
-                            for i, int_iface in enumerate(host.internal_ifaces):
-                                try:
-                                    int_iface.routed_by = self.site.bastion.routed_subnets[i].routing_iface
-                                    int_iface.db.update()
-                                except IndexError:
-                                    pass
-                    else:
-                        # There is no internal routing for this setup yet
-                        pass
+            # 3. Assign networking capabilities: dhclient to be specific.
+            dhcp_ifaces = self.physical_ifaces.clone().rdf.filter(lambda x: x.routingstyle==RoutingStyle.DHCP)
+            if dhcp_ifaces.size>1 and len(self.fibs)>1:
+
+                # Update previously created dhclient capabilities
+                updated = 0
+                dhclients = self.capability.rdf.filter(lambda x: x.service=='dhclient') if self.capability else []
+                for i, dhclient in enumerate(dhclients):
+                    dhclient.db.update({
+                        'start_rc' : False,
+                        'start_local' : True,
+                        'start_local_prms' : dhcp_ifaces[i].name,
+                        'fib' : self.fibs[updated]
+                    })
+                    updated += 1
+
+                # Create remaining required dhclients (i.e. one for current interface)
+                for i in range(updated, len(self.fibs)):
+                    OAG_Capability().db.create({
+                        'deployment' : None,
+                        'host' : self,
+                        'service' : dhc.name,
+                        'stripe' : 0,
+                        'affinity' : None,
+                        'cores' : dhc.cores if dhc.cores else 0,
+                        'memory' : dhc.memory if dhc.memory else 0,
+                        'start_rc' : False,
+                        'start_local' : True,
+                        'start_local_prms' : dhcp_ifaces[i].name,
+                        'fib' : self.fibs[i],
+                    })
 
         return iface
 
@@ -661,6 +694,13 @@ class OAG_Host(OAG_FriezeRoot):
     @property
     def containers(self):
         return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
+
+    @oagprop
+    def fibs(self, **kwargs):
+        if self.role==HostRole.SITEBASTION:
+            return [FIB.DEFAULT]
+        else:
+            return [iface.fib for iface in self.physical_ifaces.clone()]
 
     @property
     def fqdn(self):
@@ -715,6 +755,9 @@ class OAG_NetIface(OAG_FriezeRoot):
         'mac'         : [ 'text',       None,  None ],
         # Is connected to the internet
         'is_external' : [ 'boolean',    False, None ],
+        # Routing table to default to
+        'fib'         : [ FIB,          None,  None ],
+        # Is wireless
         'wireless'    : [ 'boolean',    True,  None ],
         # Interface is part of a bridge
         'bridge'      : [ OAG_NetIface, False, None ],
@@ -826,7 +869,7 @@ class OAG_NetIface(OAG_FriezeRoot):
             OAError("Non-physical interfaces can't clone vlans")
 
     @staticproperty
-    def formatstr(self): return "    %-10s|%-23s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
+    def formatstr(self): return "    %-10s|%-23s|%-17s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
 
     def summarize(self):
         """Purely informational, shouldn't appear anywhere in production code!"""
@@ -834,6 +877,7 @@ class OAG_NetIface(OAG_FriezeRoot):
         print(self.formatstr % (
             self.name,
             self.routingstyle,
+            self.fib,
             self.bird_enabled,
             self.dhcpd_enabled,
             self.is_gateway,
@@ -882,10 +926,7 @@ class OAG_Site(OAG_FriezeRoot):
 
             # Add network interfaces
             for iface in template.interfaces:
-                if iface[1]:
-                    host.add_iface(iface[0], is_external=True)
-                else:
-                    host.add_iface(iface[0])
+                host.add_iface(iface[0], iface[1], fib=iface[2] if len(iface)>2 else FIB.DEFAULT)
 
             # Add tunable parameters
             for sysctl in template.sysctls:
@@ -899,9 +940,22 @@ class OAG_Site(OAG_FriezeRoot):
                 else:
                     print("[%s] tunable not compatible with [%s]" % (sysctl[0], host.os))
 
-            # On host (i.e. bare metal, non-jailed processes)
+            # On host (i.e. bare metal, non-jailed) processes
             for cap in template.caps:
-                host.add_capability(cap[0], default_state=cap[1])
+                try:
+                    kwargs = {}
+                    (capability, enabled, fibs) = cap
+                    if len(fibs)>1:
+                        kwargs['enable_state'] = False
+                    else:
+                        kwargs['enable_state'] = enabled
+
+                    for fib in fibs:
+                        kwargs['fib'] = fib
+                        host.add_capability(capability, **kwargs)
+                except ValueError:
+                    (capability, enabled) = cap
+                    host.add_capability(capability, enable_state=enabled)
 
         return host
 

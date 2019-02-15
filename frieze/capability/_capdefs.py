@@ -1,5 +1,6 @@
 __all__ = [
     'CapabilityTemplate',
+    'dhclient',
     'gateway',
     'linux',
     'nginx',
@@ -17,14 +18,19 @@ class CapabilityTemplate(object):
     # Resource expectations.
     cores  = None
     memory = None
+
     # Mounts to be fed into the capability's container
     mounts = []
+
     # Ports to be redirected from outside
     ports = []
+
     # Config files that need to be set in the container
     config = []
-    # The site in which we would like this cability to be run. None for any site.
+
+    # The site in which we would like this capability to be run. None for any site.
     affinity = None
+
     # Application can exist inside a jail
     jailable = True
 
@@ -32,7 +38,19 @@ class CapabilityTemplate(object):
     def name(cls):
         return cls.__name__
 
+    def startcmd(self, os, fib, *args):
+        """Return command to be used when starting this capability without
+        the system job management infrastructure"""
+        from ..osinfo import OSFamily
+        extra_prms = ' '.join(args)
+        return {
+            OSFamily.FreeBSD: "setfib %s service %s restart %s" % (fib.value, self.name, extra_prms)
+        }[os.family]
+
 ## Service definitions
+
+class dhclient(CapabilityTemplate):
+    jailable = False
 
 class gateway(CapabilityTemplate): pass
 
