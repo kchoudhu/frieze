@@ -1,6 +1,8 @@
 __all__ = [
     'CapabilityTemplate',
+    'bird',
     'dhclient',
+    'dhcpd',
     'gateway',
     'linux',
     'nginx',
@@ -48,6 +50,12 @@ class CapabilityTemplate(object):
         }[os.family]
 
 ## Service definitions
+
+class bird(CapabilityTemplate):
+    jailable = False
+
+class dhcpd(CapabilityTemplate):
+    jailable = False
 
 class dhclient(CapabilityTemplate):
     jailable = False

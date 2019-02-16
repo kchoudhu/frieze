@@ -24,7 +24,7 @@ from openarc.exception import OAGraphRetrieveError, OAError
 
 from .auth import CertAuth, CertFormat
 from .osinfo import HostOS, Tunable, TunableType, OSFamily
-from .capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc
+from .capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc, bird, dhcpd
 
 #### Helper functions
 
@@ -644,7 +644,7 @@ class OAG_Host(OAG_FriezeRoot):
                 self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, iface=iface)
 
             # 3. Assign networking capabilities: dhclient to be specific.
-            dhcp_ifaces = self.physical_ifaces.clone().rdf.filter(lambda x: x.routingstyle==RoutingStyle.DHCP)
+            dhcp_ifaces = self.physical_ifaces.rdf.filter(lambda x: x.routingstyle==RoutingStyle.DHCP)
             if dhcp_ifaces.size>1 and len(self.fibs)>1:
 
                 # Update previously created dhclient capabilities
@@ -659,7 +659,7 @@ class OAG_Host(OAG_FriezeRoot):
                     })
                     updated += 1
 
-                # Create remaining required dhclients (i.e. one for current interface)
+                # Create remaining required dhclients (i.e. for current interface)
                 for i in range(updated, len(self.fibs)):
                     OAG_Capability().db.create({
                         'deployment' : None,
@@ -674,6 +674,25 @@ class OAG_Host(OAG_FriezeRoot):
                         'start_local_prms' : dhcp_ifaces[i].name,
                         'fib' : self.fibs[i],
                     })
+
+            # 4. Enable dhcpd on bastion (if it exists) -every- time because each new added interface
+            #    potentially dhcpd to start
+            if self.site.bastion:
+                bastion = self.site.bastion
+                try:
+                    cap_dhcpd = bastion.capability.rdf.filter(lambda x: x.service=='dhcpd') if bastion.capability else bastion.capability
+                except AttributeError:
+                    cap_dhcpd = None
+                if not cap_dhcpd:
+                    bastion.add_capability(dhcpd, enable_state=True)
+
+            # 5. If this is an internal interface, enable bird
+            if not iface.is_external:
+                self.add_capability(bird, enable_state=True)
+
+        return self
+
+
 
         return iface
 
