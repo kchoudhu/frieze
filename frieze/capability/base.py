@@ -32,6 +32,9 @@ class CapabilityTemplate(object):
     # Application can exist inside a jail
     jailable = True
 
+    # Package to install
+    package = None
+
     # Knobs used by job system to adjust the operation of this capability. Knobs
     # not in this list cannot be set on the capability
     knobs = []
@@ -69,9 +72,11 @@ class CapabilityTemplate(object):
 ## Service definitions
 
 class bird(CapabilityTemplate):
+    package = 'bird'
     jailable = False
 
 class dhcpd(CapabilityTemplate):
+    package = 'isc-dhcp44-server'
     jailable = False
     knobs = [
         'ifaces'
@@ -83,6 +88,9 @@ class dhclient(CapabilityTemplate):
 class gateway(CapabilityTemplate): pass
 
 class linux(CapabilityTemplate): pass
+
+class openssh(CapabilityTemplate):
+    package = 'openssh'
 
 class sshd(CapabilityTemplate): pass
 

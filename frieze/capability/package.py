@@ -15,8 +15,6 @@ class openrelayd(CapabilityTemplate):
     cores  =  0.25
     memory =  512
 
-class openssh(CapabilityTemplate): pass
-
 class postgres(CapabilityTemplate):
     cores  =  1
     memory =  1024
