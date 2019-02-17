@@ -68,6 +68,11 @@ class ConfigGenFreeBSD(object):
                     value = service.startcmd(self.host.os, capability.fib, capability.start_local_prms)
                     rv[ConfigFile.RC_LOCAL][knob] = value
 
+            if capability.capability_knob:
+                for cck in capability.capability_knob:
+                    knob = '%s_%s' % (capability.service, cck.knob)
+                    rv[ConfigFile.RC_CONF][knob] = cck.value
+
             return rv
 
         def gen_property_config(prop, *qualifiers, value=None):

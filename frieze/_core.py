@@ -216,6 +216,25 @@ class OAG_Capability(OAG_FriezeRoot):
     def slot_factor(self):
         return (self.cores if self.cores else 0.25) * (self.memory if self.memory else 256)
 
+class OAG_CapabilityKnob(OAG_FriezeRoot):
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+    }
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'capability' : [ OAG_Capability, True,  None ],
+        'knob'       : [ 'text',         True,  None ],
+        'value'      : [ 'text',         True,  None ],
+    }
+
 class OAG_CapRequiredMount(OAG_FriezeRoot):
 
     @staticproperty
@@ -272,21 +291,21 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, template, enable_state=True, affinity=None, stripes=1):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
-        If template doesn't specify cores or memory required, just go ahead
+        If capdef doesn't specify cores or memory required, just go ahead
         and put it on the first host with ANY space on it.
 
         Also check to make sure that the capability can be containerized,
         and throw if it cannot"""
-        if isinstance(template(), CapabilityTemplate):
+        if isinstance(capdef, CapabilityTemplate):
 
-            if not template.jailable:
+            if not capdef.jailable:
                 raise OAError("Application [%s] is not jailable and cannot be added to deployment")
 
             try:
-                cap = OAG_Capability((self, template.name), 'by_depl_capname')
+                cap = OAG_Capability((self, capdef.name), 'by_depl_capname')
                 stripe_base = cap[-1].stripe+1
             except OAGraphRetrieveError:
                 stripe_base = 0
@@ -297,11 +316,11 @@ class OAG_Deployment(OAG_FriezeRoot):
                         OAG_Capability().db.create({
                             'deployment' : self,
                             'host' : None,
-                            'service' : template.name,
+                            'service' : capdef.name,
                             'stripe' : stripe_base+stripe,
                             'affinity' : affinity,
-                            'cores' : template.cores if template.cores else 0,
-                            'memory' : template.memory if template.memory else 0,
+                            'cores' : capdef.cores if capdef.cores else 0,
+                            'memory' : capdef.memory if capdef.memory else 0,
                             'start_rc' : enable_state,
                             'start_local' : False,
                             # OK to set FIB.DEFAULT: containerized capabilities
@@ -309,7 +328,7 @@ class OAG_Deployment(OAG_FriezeRoot):
                             'fib' : FIB.DEFAULT,
                         })
 
-                    for (mount, size_gb) in template.mounts:
+                    for (mount, size_gb) in capdef.mounts:
                         capmount =\
                             OAG_CapRequiredMount().db.create({
                                 'cap' : cap,
@@ -555,12 +574,12 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, template, enable_state=None, fib=FIB.DEFAULT):
+    def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT):
         """Run an capability on a host. Enable it."""
-        if isinstance(template(), CapabilityTemplate):
+        if isinstance(capdef, CapabilityTemplate):
             create = True
             try:
-                cap = OAG_Capability((self, template.name), 'by_host_capname')
+                cap = OAG_Capability((self, capdef.name), 'by_host_capname')
                 create = False
             except OAGraphRetrieveError:
                 pass
@@ -571,17 +590,26 @@ class OAG_Host(OAG_FriezeRoot):
                         OAG_Capability().db.create({
                             'deployment' : None,
                             'host' : self,
-                            'service' : template.name,
+                            'service' : capdef.name,
                             'stripe' : 0,
                             'affinity' : None,
-                            'cores' : template.cores if template.cores else 0,
-                            'memory' : template.memory if template.memory else 0,
+                            'cores' : capdef.cores if capdef.cores else 0,
+                            'memory' : capdef.memory if capdef.memory else 0,
                             'start_rc' : enable_state,
                             'start_local' : False,
                             'fib' : fib,
                         })
 
-                    if template.mounts:
+                    if capdef.setknobs_exist:
+                        for knob, value in capdef.set_knobs.items():
+                            knob =\
+                                OAG_CapabilityKnob().db.create({
+                                    'capability' : cap,
+                                    'knob' : knob,
+                                    'value' : value
+                                })
+
+                    if capdef.mounts:
                         raise OAError("Mounts not supported for baremetal caps")
         else:
             raise OAError("AppGroups not yet supported")
@@ -683,18 +711,22 @@ class OAG_Host(OAG_FriezeRoot):
                     cap_dhcpd = bastion.capability.rdf.filter(lambda x: x.service=='dhcpd') if bastion.capability else bastion.capability
                 except AttributeError:
                     cap_dhcpd = None
+                dhcpd_ifaces = ' '.join([iface.name for iface in bastion.internal_ifaces])
                 if not cap_dhcpd:
-                    bastion.add_capability(dhcpd, enable_state=True)
+                    dhcpd_capdef = dhcpd().setknob('ifaces', dhcpd_ifaces)
+                    bastion.add_capability(dhcpd_capdef, enable_state=True)
+                else:
+                    dhcpd_iface_knob = cap_dhcpd.capability_knob.rdf.filter(lambda x: x.knob=='ifaces')
+                    if dhcpd_ifaces != dhcpd_iface_knob.value:
+                        dhcpd_iface_knob.db.update({
+                            'value' : dhcpd_ifaces
+                        })
 
             # 5. If this is an internal interface, enable bird
             if not iface.is_external:
-                self.add_capability(bird, enable_state=True)
+                self.add_capability(bird(), enable_state=True)
 
         return self
-
-
-
-        return iface
 
     @property
     def block_storage(self):
@@ -971,10 +1003,10 @@ class OAG_Site(OAG_FriezeRoot):
 
                     for fib in fibs:
                         kwargs['fib'] = fib
-                        host.add_capability(capability, **kwargs)
+                        host.add_capability(capability(), **kwargs)
                 except ValueError:
                     (capability, enabled) = cap
-                    host.add_capability(capability, enable_state=enabled)
+                    host.add_capability(capability(), enable_state=enabled)
 
         return host
 

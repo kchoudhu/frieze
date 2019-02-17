@@ -36,6 +36,27 @@ class CapabilityTemplate(object):
     # Application can exist inside a jail
     jailable = True
 
+    # Knobs used by job system to adjust the operation of this capability. Knobs
+    # not in this list cannot be set on the capability
+    knobs = []
+
+    def __init__(self):
+        self.set_knobs = {}
+
+    def setknob(self, knob, value):
+        knobs = getattr(self, 'set_knobs', {})
+        if not knobs:
+            setattr(self, 'set_knobs', knobs)
+        if knob in self.knobs:
+            self.set_knobs[knob] = value
+        else:
+            raise OAError("[%s] is not a permitted knob for %s" % (knob, self.name))
+        return self
+
+    @property
+    def setknobs_exist(self):
+        return len(self.set_knobs)>0
+
     @staticproperty
     def name(cls):
         return cls.__name__
@@ -56,6 +77,9 @@ class bird(CapabilityTemplate):
 
 class dhcpd(CapabilityTemplate):
     jailable = False
+    knobs = [
+        'ifaces'
+    ]
 
 class dhclient(CapabilityTemplate):
     jailable = False
