@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
-from . import _capdefs
+from . import base
 
-from ._capdefs import *
+from .base import *
+from .package import *
 
 __all__ = ['ConfigGenFreeBSD', 'ConfigGenLinux']
-__all__.extend(_capdefs.__all__)
+__all__.extend(base.__all__)
+__all__.extend(package.__all__)
 
 ###### Some other definitions
 import collections
