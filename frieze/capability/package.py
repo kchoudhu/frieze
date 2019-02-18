@@ -1,7 +1,6 @@
 __all__ = [
     'nginx',
     'openrelayd',
-    'openssh',
     'postgres'
 ]
 

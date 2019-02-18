@@ -5,6 +5,7 @@ __all__ = [
     'dhcpd',
     'gateway',
     'linux',
+    'openssh',
     'sshd',
     'zfs',
 ]
