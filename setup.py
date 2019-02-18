@@ -16,6 +16,7 @@ setup(name='frieze',
       license='BSD',
       packages=find_packages(),
       install_requires=[
+        'mako',
         'openarc',
         'vultr'
       ],

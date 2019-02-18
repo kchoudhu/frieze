@@ -13,7 +13,10 @@ __all__.extend(package.__all__)
 import collections
 import enum
 import importlib
+import mako.template
 import os
+import pkg_resources as pkg
+
 from ..osinfo import HostOS, OSFamily, TunableType, Tunable
 from ..hostproperty import HostProperty
 
@@ -32,13 +35,13 @@ class ConfigGenFreeBSD(object):
         from .._core import RoutingStyle, FIB
         def gen_sysctl_config(dbsysctl):
             (file, knob, value) = {
-                TunableType.BOOT    : ( ConfigFile.BOOT_LOADER,
+                TunableType.BOOT    : ( ConfigFile.BOOT_LOADER.value,
                                         dbsysctl.tunable.sysctl,
                                         dbsysctl.value),
-                TunableType.RUNTIME : ( ConfigFile.SYSCTL_CONF,
+                TunableType.RUNTIME : ( ConfigFile.SYSCTL_CONF.value,
                                         dbsysctl.tunable.sysctl,
                                         dbsysctl.value),
-                TunableType.KMOD    : ( ConfigFile.BOOT_LOADER,
+                TunableType.KMOD    : ( ConfigFile.BOOT_LOADER.value,
                                        "%s_load" % dbsysctl.tunable.sysctl,
                                        "YES" if dbsysctl.value=='true' else "NO"),
             }[tunable.type]
@@ -47,14 +50,14 @@ class ConfigGenFreeBSD(object):
 
         def gen_capability_config(capability):
             rv = {
-                ConfigFile.RC_CONF  : {},
-                ConfigFile.RC_LOCAL : {},
+                ConfigFile.RC_CONF.value  : {},
+                ConfigFile.RC_LOCAL.value : {},
             }
 
             knob     = "%s_enable" % capability.service
             knob_fib = "%s_fib" % capability.service
 
-            rv[ConfigFile.RC_CONF] = {
+            rv[ConfigFile.RC_CONF.value] = {
                 True : {knob : "YES"},
                 False: {knob : "NO"},
                 None : {},
@@ -62,24 +65,34 @@ class ConfigGenFreeBSD(object):
 
             if capability.start_rc:
                 if capability.fib==FIB.WORLD:
-                    rv[ConfigFile.RC_CONF][knob_fib] = capability.fib.value
+                    rv[ConfigFile.RC_CONF.value][knob_fib] = capability.fib.value
             else:
                 if capability.start_local:
                     knob  = "%s_%s" % (capability.service, capability.id)
                     service = getattr(importlib.import_module(__name__), capability.service)()
                     value = service.startcmd(self.host.os, capability.fib, capability.start_local_prms)
-                    rv[ConfigFile.RC_LOCAL][knob] = value
+                    rv[ConfigFile.RC_LOCAL.value][knob] = value
 
             if capability.capability_knob:
                 for cck in capability.capability_knob:
                     knob = '%s_%s' % (capability.service, cck.knob)
-                    rv[ConfigFile.RC_CONF][knob] = cck.value
+                    rv[ConfigFile.RC_CONF.value][knob] = cck.value
+
+            # Generate configurations if present in resources
+            try:
+                cap_cfgs = pkg.resource_listdir('frieze.capability.resources', capability.service)
+                for cfg in [cfg for cfg in cap_cfgs if cfg[:2]!='__']:
+                    cfg_raw = pkg.resource_string('frieze.capability.resources.%s' % capability.service, cfg).decode()
+                    cfg_name = cfg_raw.split('\n')[0][2:].strip()
+                    rv[cfg_name] = mako.template.Template(cfg_raw).render(host=self.host)
+            except FileNotFoundError:
+                pass
 
             return rv
 
         def gen_property_config(prop, *qualifiers, value=None):
             return {
-                ConfigFile.RC_CONF : {
+                ConfigFile.RC_CONF.value : {
                     '%s_%s' % (prop.name, '_'.join(qualifiers)) : value
                 }
             }
@@ -113,7 +126,7 @@ class ConfigGenFreeBSD(object):
 
         # Flatten rc.local into an array of commands to be executed
         try:
-            self.cfg[ConfigFile.RC_LOCAL] = [v for k, v in self.cfg[ConfigFile.RC_LOCAL].items()]
+            self.cfg[ConfigFile.RC_LOCAL.value] = [v for k, v in self.cfg[ConfigFile.RC_LOCAL.value].items()]
         except KeyError:
             pass
 
@@ -122,7 +135,7 @@ class ConfigGenFreeBSD(object):
     def emit_output(self, targetdir):
         with open(os.path.join(targetdir, 'MANIFEST'), 'w') as mfst:
             for tgt_file_name, payload in self.cfg.items():
-                src_file_name = tgt_file_name.value.replace('/', '_')[1:]
+                src_file_name = tgt_file_name.replace('/', '_')[1:]
                 with open(os.path.join(targetdir, src_file_name), 'w') as f:
                     if type(payload)==dict:
                         for k, v in payload.items():
@@ -130,6 +143,8 @@ class ConfigGenFreeBSD(object):
                     elif type(payload)==list:
                         for v in payload:
                             f.write("%s\n" % v)
+                    elif type(payload)==str:
+                        f.write(payload)
                     mfst.write("%s %s\n" % (src_file_name, tgt_file_name))
 
 class ConfigGenLinux(object):
