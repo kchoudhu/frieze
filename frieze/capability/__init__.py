@@ -21,10 +21,11 @@ from ..osinfo import HostOS, OSFamily, TunableType, Tunable
 from ..hostproperty import HostProperty
 
 class ConfigFile(enum.Enum):
-    RC_CONF     = '/etc/rc.conf.local'
-    RC_LOCAL    = '/etc/rc.local'
-    BOOT_LOADER = '/boot/loader.conf.local'
-    SYSCTL_CONF = '/etc/sysctl.conf'
+    COMMAND_LIST = 'cmdlist'
+    RC_CONF      = '/etc/rc.conf.local'
+    RC_LOCAL     = '/etc/rc.local'
+    BOOT_LOADER  = '/boot/loader.conf.local'
+    SYSCTL_CONF  = '/etc/sysctl.conf.local'
 
 class ConfigGenFreeBSD(object):
     def __init__(self, host):
@@ -35,13 +36,13 @@ class ConfigGenFreeBSD(object):
         from .._core import RoutingStyle, FIB
         def gen_sysctl_config(dbsysctl):
             (file, knob, value) = {
-                TunableType.BOOT    : ( ConfigFile.BOOT_LOADER.value,
+                TunableType.BOOT    : ( ConfigFile.BOOT_LOADER,
                                         dbsysctl.tunable.sysctl,
                                         dbsysctl.value),
-                TunableType.RUNTIME : ( ConfigFile.SYSCTL_CONF.value,
+                TunableType.RUNTIME : ( ConfigFile.SYSCTL_CONF,
                                         dbsysctl.tunable.sysctl,
                                         dbsysctl.value),
-                TunableType.KMOD    : ( ConfigFile.BOOT_LOADER.value,
+                TunableType.KMOD    : ( ConfigFile.BOOT_LOADER,
                                        "%s_load" % dbsysctl.tunable.sysctl,
                                        "YES" if dbsysctl.value=='true' else "NO"),
             }[tunable.type]
@@ -50,14 +51,14 @@ class ConfigGenFreeBSD(object):
 
         def gen_capability_config(capability):
             rv = {
-                ConfigFile.RC_CONF.value  : {},
-                ConfigFile.RC_LOCAL.value : {},
+                ConfigFile.RC_CONF  : {},
+                ConfigFile.RC_LOCAL : {},
             }
 
             knob     = "%s_enable" % capability.service
             knob_fib = "%s_fib" % capability.service
 
-            rv[ConfigFile.RC_CONF.value] = {
+            rv[ConfigFile.RC_CONF] = {
                 True : {knob : "YES"},
                 False: {knob : "NO"},
                 None : {},
@@ -65,18 +66,18 @@ class ConfigGenFreeBSD(object):
 
             if capability.start_rc:
                 if capability.fib==FIB.WORLD:
-                    rv[ConfigFile.RC_CONF.value][knob_fib] = capability.fib.value
+                    rv[ConfigFile.RC_CONF][knob_fib] = capability.fib.value
             else:
                 if capability.start_local:
                     knob  = "%s_%s" % (capability.service, capability.id)
                     service = getattr(importlib.import_module(__name__), capability.service)()
                     value = service.startcmd(self.host.os, capability.fib, capability.start_local_prms)
-                    rv[ConfigFile.RC_LOCAL.value][knob] = value
+                    rv[ConfigFile.RC_LOCAL][knob] = value
 
             if capability.capability_knob:
                 for cck in capability.capability_knob:
                     knob = '%s_%s' % (capability.service, cck.knob)
-                    rv[ConfigFile.RC_CONF.value][knob] = cck.value
+                    rv[ConfigFile.RC_CONF][knob] = cck.value
 
             # Generate configurations if present in resources
             try:
@@ -92,7 +93,7 @@ class ConfigGenFreeBSD(object):
 
         def gen_property_config(prop, *qualifiers, value=None):
             return {
-                ConfigFile.RC_CONF.value : {
+                ConfigFile.RC_CONF : {
                     '%s_%s' % (prop.name, '_'.join(qualifiers)) : value
                 }
             }
@@ -105,6 +106,19 @@ class ConfigGenFreeBSD(object):
                 else:
                     dct[k] = merge_dct[k]
 
+        # Install packages to begin with
+        self.cfg[ConfigFile.COMMAND_LIST] = []
+        install_pkgs = [c.package for c in self.host.capability if c.package]
+        self.cfg[ConfigFile.COMMAND_LIST].append('yes | pkg install '+ ' '.join(install_pkgs))
+
+        # What about those tunables!
+        for tunable in self.host.sysctl:
+            dict_merge(self.cfg, gen_sysctl_config(tunable))
+
+        # Merge in capability information
+        for capability in self.host.capability:
+            dict_merge(self.cfg, gen_capability_config(capability))
+
         # Set a hostname
         dict_merge(self.cfg, gen_property_config(HostProperty.hostname, value=self.host.fqdn))
 
@@ -116,14 +130,6 @@ class ConfigGenFreeBSD(object):
                 value = 'inet %s netmask %s' % (iface.ip4, iface.broadcast)
             dict_merge(self.cfg, gen_property_config(HostProperty.ifconfig, iface.name, value=value))
 
-        # Merge in capability information
-        for capability in self.host.capability:
-            dict_merge(self.cfg, gen_capability_config(capability))
-
-        # What about those tunables!
-        for tunable in self.host.sysctl:
-            dict_merge(self.cfg, gen_sysctl_config(tunable))
-
         # Flatten rc.local into an array of commands to be executed
         try:
             self.cfg[ConfigFile.RC_LOCAL.value] = [v for k, v in self.cfg[ConfigFile.RC_LOCAL.value].items()]
@@ -133,19 +139,38 @@ class ConfigGenFreeBSD(object):
         return self
 
     def emit_output(self, targetdir):
-        with open(os.path.join(targetdir, 'MANIFEST'), 'w') as mfst:
-            for tgt_file_name, payload in self.cfg.items():
-                src_file_name = tgt_file_name.replace('/', '_')[1:]
-                with open(os.path.join(targetdir, src_file_name), 'w') as f:
-                    if type(payload)==dict:
+        for i, (tgt_file, payload) in enumerate(self.cfg.items()):
+            src_file = tgt_file.value if isinstance(tgt_file, ConfigFile) else tgt_file
+            if src_file[0]=='/':
+                src_file = src_file[1:]
+            src_file = src_file.replace('/', '_')
+            if isinstance(tgt_file, ConfigFile):
+                # Data is coming in structured
+                if type(payload)==dict:
+                    src_file = '%05d-%s' % (i, src_file)
+                    with open(os.path.join(targetdir, src_file), 'w') as f:
+                        f.write('>>%s\n' % tgt_file.value)
                         for k, v in payload.items():
                             f.write('%s="%s"\n' % (k, v))
-                    elif type(payload)==list:
-                        for v in payload:
-                            f.write("%s\n" % v)
-                    elif type(payload)==str:
-                        f.write(payload)
-                    mfst.write("%s %s\n" % (src_file_name, tgt_file_name))
+                elif type(payload)==list:
+                    if tgt_file==ConfigFile.RC_LOCAL:
+                        src_file = '%05d-%s' % (i, src_file)
+                        with open(os.path.join(targetdir, src_file), 'w') as f:
+                            f.write('>>%s\n' % tgt_file.value)
+                            for v in payload:
+                                f.write("%s\n" % v)
+                    elif tgt_file==ConfigFile.COMMAND_LIST:
+                        for j, cmd in enumerate(payload):
+                            sequenced_src_file = '%05d-%05d-%s' % (i, j, src_file)
+                            with open(os.path.join(targetdir, sequenced_src_file), 'w') as f:
+                                f.write('#!%s' % cmd)
+                    else:
+                        raise OAError("Not a supported filetype")
+            else:
+                # This is a straight config file, just output the payload. Header is assumed
+                src_file = '%05d-%s' % (i, src_file)
+                with open(os.path.join(targetdir, src_file), 'w') as f:
+                    f.write(payload)
 
 class ConfigGenLinux(object):
     def __init__(self, host):

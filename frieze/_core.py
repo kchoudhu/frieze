@@ -5,6 +5,7 @@ __all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'HostTem
 import base64
 import collections
 import enum
+import frieze.capability
 import gevent
 import io
 import openarc.env
@@ -22,9 +23,9 @@ from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
 
-from .auth import CertAuth, CertFormat
-from .osinfo import HostOS, Tunable, TunableType, OSFamily
-from .capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc, bird, dhcpd
+from frieze.auth import CertAuth, CertFormat
+from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
+from frieze.capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc, bird, dhcpd
 
 #### Helper functions
 
@@ -211,6 +212,15 @@ class OAG_Capability(OAG_FriezeRoot):
     @property
     def fqdn(self):
         return "%s%d.%s.%s" % (self.service, self.stripe, self.deployment.name, self.deployment.domain.domain)
+
+    @property
+    def package(self):
+        # In base?
+        c_capability = getattr(frieze.capability, self.service, None)
+        if c_capability:
+            return c_capability.package
+        else:
+            return None
 
     @property
     def slot_factor(self):
