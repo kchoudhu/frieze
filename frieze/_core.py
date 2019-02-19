@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB']
+__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'NetifType', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB']
 
 import base64
 import collections
