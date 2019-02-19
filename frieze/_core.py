@@ -8,6 +8,7 @@ import enum
 import frieze.capability
 import gevent
 import io
+import ipaddress
 import openarc.env
 import os
 import pkg_resources as pkg
@@ -423,32 +424,54 @@ class OAG_Domain(OAG_FriezeRoot):
             print("Not refreshing certificate authority")
 
     @friezetxn
-    def assign_subnet(self, type_, iface=None):
-        # Save a subnet for administration
-        if type_==SubnetType.ROUTING:
-            sid = '172.16.0'
-        elif type_==SubnetType.SITE:
-            site_subnets = self.subnet.rdf.filter(lambda x: x.type==SubnetType.SITE)
+    def assign_subnet(self, type_, hosts_expected=254, iface=None):
 
-            if site_subnets.size==0:
-                sid = '172.16.1'
-            else:
-                sid = '172.16.%d' % (int(site_subnets[-1].sid.split('.')[-1])+1)
+
+        # Calculate smallest possible prefix that can accommodate number of
+        # hosts expected.
+        def hosts_to_prefix(hostcount, prefix__=8):
+            while hostcount<=pow(2, 32-prefix__)-2:
+                prefix__+=1
+            return prefix__-1
+
+        prefixlen = hosts_to_prefix(hosts_expected)
+
+        if type_ in (SubnetType.ROUTING, SubnetType.SITE):
+            root_network    = '172.16.0.0'
+            root_prefixlen  =  12
         else:
-            depl_subnets = self.subnet.rdf.filter(lambda x: x.type==SubnetType.DEPLOYMENT)
+            root_network    = '10.0.0.0'
+            root_prefixlen  =  8
 
-            if depl_subnets.size==0:
-                sid = '10.0.0'
-            else:
-                sid = '10.0.%d' % (int(depl_subnets[-1].sid.split('.')[-1])+1)
+        root_subnet = ipaddress.IPv4Network('%s/%s' % (root_network, root_prefixlen))
+
+        # How many of subnets sized prefixlen are there in root_subnet
+        candidate_subnets = root_subnet.subnets(prefixlen_diff=prefixlen-root_prefixlen)
+        existing_subnets = []
+        try:
+            existing_subnets = [esub.ip4network for esub in self.subnet.rdf.filter(lambda x: x.type==type_)]
+        except AttributeError:
+            pass
+
+        for csubnet in candidate_subnets:
+            overlap_found = False
+            for esub in existing_subnets:
+                if csubnet.overlaps(esub):
+                    overlap_found = True
+            if not overlap_found:
+                break
+
+        # Degenerate case: we don't have any subnets left
+        if overlap_found:
+            raise OAError("Subnet exhaustion")
 
         self.db.search()
 
         return\
             OAG_Subnet().db.create({
                 'domain'        : self,
-                'sid'           : sid,
-                'mask'          : 24,
+                'network'       : str(csubnet.network_address),
+                'prefixlen'     : int(csubnet.prefixlen),
                 'type'          : type_.value,
                 'router'        : iface.host if iface else None,
                 'routing_iface' : iface,
@@ -675,11 +698,11 @@ class OAG_Host(OAG_FriezeRoot):
                                 int_iface.db.update()
                             except IndexError:
                                 raise OAError("Unable to find corresponding internal routing interface")
-                self.site.domain.assign_subnet(SubnetType.SITE, iface=iface)
+                self.site.domain.assign_subnet(SubnetType.SITE, hosts_expected=1000, iface=iface)
 
             # 2. Assign subnets to VLAN that is being created
             if iface.type==NetifType.VLAN:
-                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, iface=iface)
+                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, hosts_expected=20, iface=iface)
 
             # 3. Assign networking capabilities: dhclient to be specific.
             dhcp_ifaces = self.physical_ifaces.rdf.filter(lambda x: x.routingstyle==RoutingStyle.DHCP)
@@ -839,7 +862,8 @@ class OAG_NetIface(OAG_FriezeRoot):
         else:
             OAError("Non-bridge interfaces can't have bridge members")
 
-    def __get_subnet(self):
+    @property
+    def routed_subnet(self):
         if self.routed_by:
             return self.routed_by.subnet[-1]
 
@@ -856,8 +880,7 @@ class OAG_NetIface(OAG_FriezeRoot):
         if self.is_external:
             return self.host.netmask
         else:
-            subnet = self.__get_subnet()
-            return subnet.broadcast if subnet else None
+            return self.routed_subnet.broadcast if self.routed_subnet else None
 
     @property
     def connected_ifaces(self):
@@ -865,7 +888,7 @@ class OAG_NetIface(OAG_FriezeRoot):
 
         Return the map keyed by inferred name for easy lookup by other interfaces
         trying to learn their IP address. See @property ip4 for example on use."""
-        return {nif.infname:'%s.%d' % (self.subnet[-1].sid, i+2) for i, nif in enumerate(self.net_iface_routed_by)}
+        return {nif.infname:str([ip4 for ip4 in self.routed_subnet[-1].ip4network.hosts()][i+1]) for i, nif in enumerate(self.net_iface_routed_by)}
 
     @property
     def dhcpd_enabled(self):
@@ -876,8 +899,7 @@ class OAG_NetIface(OAG_FriezeRoot):
         if self.is_external:
             return self.host.gateway
         else:
-            subnet = self.__get_subnet()
-            return subnet.gateway if subnet else None
+            return self.routed_subnet.gateway if self.routed_subnet else None
 
     @property
     def ip4(self):
@@ -892,8 +914,7 @@ class OAG_NetIface(OAG_FriezeRoot):
                     # This is an interface responsible for assigning IP addresses
                     # to other interfaces on the subnet so its IP address is that
                     # of the subnet it is routing.
-                    subnet = self.__get_subnet()
-                    ret = subnet.gateway if subnet else None
+                    ret = self.routed_subnet.gateway if self.routed_subnet else None
                 else:
                     # Only assign IP address to routers that are being routed by
                     # another interface.
@@ -1234,8 +1255,8 @@ class OAG_Subnet(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'domain'        : [ OAG_Domain,   True,  None ],
-        'sid'           : [ 'text',       str(), None ],
-        'mask'          : [ 'int',        int(), None ],
+        'network'       : [ 'text',       str(), None ],
+        'prefixlen'     : [ 'int',        int(), None ],
         # what is this subnet used for?
         'type'          : [ SubnetType,   True,  None ],
         'router'        : [ OAG_Host,     False, None ],
@@ -1243,16 +1264,22 @@ class OAG_Subnet(OAG_FriezeRoot):
     }
 
     @property
-    def broadcast(self):
-        return "%s.255" % self.sid
+    def broadcast(self, raw=False):
+        rv = self.ip4network.broadcast_address
+        return rv if raw else str(rv)
 
     @property
-    def cidr(self):
-        return "%s.0/%d" % (self.sid, self.mask)
+    def gateway(self, raw=False):
+        rv = [i for i in self.ip4network.hosts()][0]
+        return rv if raw else str(rv)
 
     @property
-    def gateway(self):
-        return "%s.1"  % self.sid
+    def ip4network(self):
+        return ipaddress.IPv4Network('%s/%s' % (self.network, self.prefixlen))
+
+    @property
+    def with_prefixlen(self):
+        return self.ip4network.with_prefixlen
 
 class OAG_Sysctl(OAG_FriezeRoot):
     @staticproperty
@@ -1411,7 +1438,7 @@ def set_domain(domain,
                     })
 
                 # Assign a subnet
-                p_domain.assign_subnet(SubnetType.ROUTING)
+                p_domain.assign_subnet(SubnetType.ROUTING, hosts_expected=254)
 
                 # Generate a certificate authority
                 p_domain.assign_certificate_authority()
