@@ -1,0 +1,5 @@
+>>/usr/local/etc/ssh/sshd_config
+TrustedUserCAKeys /usr/local/etc/ssh/ca.pub
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+PermitRootLogin prohibit-password
