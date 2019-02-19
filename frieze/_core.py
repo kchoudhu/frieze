@@ -424,7 +424,7 @@ class OAG_Domain(OAG_FriezeRoot):
             print("Not refreshing certificate authority")
 
     @friezetxn
-    def assign_subnet(self, type_, hosts_expected=254, iface=None):
+    def assign_subnet(self, type_, hosts_expected=254, iface=None, dynamic_hosts=0):
 
 
         # Calculate smallest possible prefix that can accommodate number of
@@ -475,6 +475,7 @@ class OAG_Domain(OAG_FriezeRoot):
                 'type'          : type_.value,
                 'router'        : iface.host if iface else None,
                 'routing_iface' : iface,
+                'dynamic_hosts' : dynamic_hosts
             })
 
     @oagprop
@@ -698,11 +699,11 @@ class OAG_Host(OAG_FriezeRoot):
                                 int_iface.db.update()
                             except IndexError:
                                 raise OAError("Unable to find corresponding internal routing interface")
-                self.site.domain.assign_subnet(SubnetType.SITE, hosts_expected=1000, iface=iface)
+                self.site.domain.assign_subnet(SubnetType.SITE, hosts_expected=1000, iface=iface, dynamic_hosts=100)
 
             # 2. Assign subnets to VLAN that is being created
             if iface.type==NetifType.VLAN:
-                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, hosts_expected=20, iface=iface)
+                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, hosts_expected=14, iface=iface)
 
             # 3. Assign networking capabilities: dhclient to be specific.
             dhcp_ifaces = self.physical_ifaces.rdf.filter(lambda x: x.routingstyle==RoutingStyle.DHCP)
@@ -736,15 +737,15 @@ class OAG_Host(OAG_FriezeRoot):
                         'fib' : self.fibs[i],
                     })
 
-            # 4. Enable dhcpd on bastion (if it exists) -every- time because each new added interface
-            #    potentially dhcpd to start
+            # 4. Enable dhcpd on bastion (if it exists) -every- time because each newly added interface
+            #    can potentially trigger a dhcpd requirement
             if self.site.bastion:
                 bastion = self.site.bastion
                 try:
                     cap_dhcpd = bastion.capability.rdf.filter(lambda x: x.service=='dhcpd') if bastion.capability else bastion.capability
                 except AttributeError:
                     cap_dhcpd = None
-                dhcpd_ifaces = ' '.join([iface.name for iface in bastion.internal_ifaces])
+                dhcpd_ifaces = ' '.join([iface.name for iface in bastion.internal_ifaces if iface.dhcpd_enabled])
                 if not cap_dhcpd:
                     dhcpd_capdef = dhcpd().setknob('ifaces', dhcpd_ifaces)
                     bastion.add_capability(dhcpd_capdef, enable_state=True)
@@ -888,11 +889,11 @@ class OAG_NetIface(OAG_FriezeRoot):
 
         Return the map keyed by inferred name for easy lookup by other interfaces
         trying to learn their IP address. See @property ip4 for example on use."""
-        return {nif.infname:str([ip4 for ip4 in self.routed_subnet[-1].ip4network.hosts()][i+1]) for i, nif in enumerate(self.net_iface_routed_by)}
+        return {nif.infname:self.routed_subnet[-1].ip4network[i+2] for i, nif in enumerate(self.net_iface_routed_by)}
 
     @property
     def dhcpd_enabled(self):
-        return self.host.is_bastion and not self.is_external
+        return self.host.is_bastion and not self.is_external and not self.type==NetifType.VLAN
 
     @property
     def gateway(self):
@@ -919,7 +920,7 @@ class OAG_NetIface(OAG_FriezeRoot):
                     # Only assign IP address to routers that are being routed by
                     # another interface.
                     if self.routed_by:
-                        ret = self.routed_by.connected_ifaces[self.infname]
+                        ret = str(self.routed_by.connected_ifaces[self.infname])
 
         return ret
 
@@ -1260,18 +1261,26 @@ class OAG_Subnet(OAG_FriezeRoot):
         # what is this subnet used for?
         'type'          : [ SubnetType,   True,  None ],
         'router'        : [ OAG_Host,     False, None ],
-        'routing_iface' : [ OAG_NetIface, False, None ]
+        'routing_iface' : [ OAG_NetIface, False, None ],
+        'dynamic_hosts' : [ 'int',        True,  None ],
     }
 
     @property
-    def broadcast(self, raw=False):
-        rv = self.ip4network.broadcast_address
-        return rv if raw else str(rv)
+    def broadcast(self):
+        return self.ip4network.broadcast_address
 
     @property
-    def gateway(self, raw=False):
-        rv = [i for i in self.ip4network.hosts()][0]
-        return rv if raw else str(rv)
+    def dynamic_range(self):
+        """Assign dynamic range from "top" of subnet. Return set of min and max
+        of range"""
+        if self.dynamic_hosts:
+            return (self.ip4network[-2-(self.dynamic_hosts-1)], self.ip4network[-2])
+        else:
+            return ()
+
+    @property
+    def gateway(self):
+        return self.ip4network[1]
 
     @property
     def ip4network(self):
