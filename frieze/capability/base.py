@@ -10,6 +10,9 @@ __all__ = [
     'zfs',
 ]
 
+import mako.template
+import pkg_resources as pkg
+
 from openarc import staticproperty
 
 class CapabilityTemplate(object):
@@ -43,6 +46,24 @@ class CapabilityTemplate(object):
     def __init__(self):
         self.set_knobs = {}
 
+    def generate_cfg_files(self, host, __exclude__=[]):
+        rv = {}
+        __exclude__.append('__init__.py')
+        __exclude__.append('__pycache__')
+        try:
+            cap_cfgs = pkg.resource_listdir('frieze.capability.resources', self.name)
+            for cfg in [cfg for cfg in cap_cfgs if cfg not in __exclude__]:
+                cfg_raw = pkg.resource_string('frieze.capability.resources.%s' % self.name, cfg).decode()
+                cfg_name = cfg_raw.split('\n')[0][2:].strip()
+                rv[cfg_name] = mako.template.Template(cfg_raw).render(host=host)
+        except FileNotFoundError:
+            pass
+        return rv
+
+    @staticproperty
+    def name(cls):
+        return cls.__name__
+
     def setknob(self, knob, value):
         knobs = getattr(self, 'set_knobs', {})
         if not knobs:
@@ -56,10 +77,6 @@ class CapabilityTemplate(object):
     @property
     def setknobs_exist(self):
         return len(self.set_knobs)>0
-
-    @staticproperty
-    def name(cls):
-        return cls.__name__
 
     def startcmd(self, os, fib, *args):
         """Return command to be used when starting this capability without

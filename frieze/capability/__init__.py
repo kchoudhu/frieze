@@ -13,9 +13,7 @@ __all__.extend(package.__all__)
 import collections
 import enum
 import importlib
-import mako.template
 import os
-import pkg_resources as pkg
 
 from ..osinfo import HostOS, OSFamily, TunableType, Tunable
 from ..hostproperty import HostProperty
@@ -64,13 +62,14 @@ class ConfigGenFreeBSD(object):
                 None : {},
             }[capability.start_rc]
 
+            service = getattr(importlib.import_module(__name__), capability.service)()
+
             if capability.start_rc:
                 if capability.fib==FIB.WORLD:
                     rv[ConfigFile.RC_CONF][knob_fib] = capability.fib.value
             else:
                 if capability.start_local:
                     knob  = "%s_%s" % (capability.service, capability.id)
-                    service = getattr(importlib.import_module(__name__), capability.service)()
                     value = service.startcmd(self.host.os, capability.fib, capability.start_local_prms)
                     rv[ConfigFile.RC_LOCAL][knob] = value
 
@@ -80,14 +79,7 @@ class ConfigGenFreeBSD(object):
                     rv[ConfigFile.RC_CONF][knob] = cck.value
 
             # Generate configurations if present in resources
-            try:
-                cap_cfgs = pkg.resource_listdir('frieze.capability.resources', capability.service)
-                for cfg in [cfg for cfg in cap_cfgs if cfg[:2]!='__']:
-                    cfg_raw = pkg.resource_string('frieze.capability.resources.%s' % capability.service, cfg).decode()
-                    cfg_name = cfg_raw.split('\n')[0][2:].strip()
-                    rv[cfg_name] = mako.template.Template(cfg_raw).render(host=self.host)
-            except FileNotFoundError:
-                pass
+            rv = {**rv, **service.generate_cfg_files(self.host)}
 
             return rv
 
