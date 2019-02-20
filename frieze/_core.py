@@ -1050,6 +1050,24 @@ class OAG_Site(OAG_FriezeRoot):
         else:
             return None
 
+    @oagprop
+    def block_storage(self, **kwargs):
+        """Analyzes containers on site and returns an OAG_BlockStore object
+        listing block storage devices that need to be provided in order to run
+        the site"""
+        store_init = [['container_name', 'capmnt', 'host']]
+        for container in self.containers:
+            for cap in container.capability:
+                try:
+                    if cap.cap_required_mount:
+                        for crm in cap.cap_required_mount:
+                            store_init.append([container.fqdn, crm.clone(), container.host.clone()])
+                except AttributeError:
+                    # No caps pointed here yet
+                    pass
+
+        return OAG_SysMount() if len(store_init)==1 else OAG_SysMount(initprms=store_init)
+
     @property
     def compute_hosts(self):
         compute_hosts = self.host.clone().rdf.filter(lambda x: not x.is_bastion)
@@ -1104,24 +1122,6 @@ class OAG_Site(OAG_FriezeRoot):
     @property
     def containers(self):
         return self.domain.clone()[-1].containers.rdf.filter(lambda x: x.site.id==self.id)
-
-    @oagprop
-    def block_storage(self, **kwargs):
-        """Analyzes containers on site and returns an OAG_BlockStore object
-        listing block storage devices that need to be provided in order to run
-        the site"""
-        store_init = [['container_name', 'capmnt', 'host']]
-        for container in self.containers:
-            for cap in container.capability:
-                try:
-                    if cap.cap_required_mount:
-                        for crm in cap.cap_required_mount:
-                            store_init.append([container.fqdn, crm.clone(), container.host.clone()])
-                except AttributeError:
-                    # No caps pointed here yet
-                    pass
-
-        return OAG_SysMount() if len(store_init)==1 else OAG_SysMount(initprms=store_init)
 
     def prepare_infrastructure(self):
 
