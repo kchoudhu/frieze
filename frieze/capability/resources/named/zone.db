@@ -12,7 +12,7 @@ $TTL 604800
      604800  ; Negative Cache TTL
 )
 ${'%-30s' % '@'} IN  NS  ns1.
-${'%-30s' % 'ns1'} IN  A   ${host.net_iface.clone().rdf.filter(lambda x: x.is_external is False and x.type==frieze.NetifType.PHYSICAL)[0].ip4}
+${'%-30s' % 'ns1'} IN  A   ${host.ip4()}
 % for zcru in zonecontainer.rununits:
 ${'%-30s'% zcru.name} IN  A   ${zcru.ip4()}
 % endfor
