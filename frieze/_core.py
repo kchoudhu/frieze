@@ -523,25 +523,41 @@ class OAG_Domain(OAG_FriezeRoot):
     @oagprop
     def containers(self, **kwargs):
         """Global view of jobs. Can be filtered by OAG_Deployment or OAG_Site
-        to determine what the distribution of containers"""
+        to determine what the distribution of containers currently is"""
 
-        # Create resource map
-        resources = {}
-        for site in self.site:
-            try:
-                resources[site.shortname]
-            except KeyError:
-                resources[site.shortname] = {}
-
-            for i, host in enumerate(site.compute_hosts):
+        def init_resource_matrix():
+            rmatrix = {}
+            for site in self.site:
                 try:
-                    resources[site.shortname][host.fqdn]
+                    rmatrix[site.shortname]
                 except KeyError:
-                    resources[site.shortname][host.fqdn] = {
-                        'container_count' : 0,
-                        'oag'             : host.clone()[i],
-                        'slot_factor'     : host.memory * host.cpus
-                    }
+                    rmatrix[site.shortname] = {}
+
+                for i, host in enumerate(site.compute_hosts):
+                    try:
+                        rmatrix[site.shortname][host.fqdn]
+                    except KeyError:
+                        rmatrix[site.shortname][host.fqdn] = {
+                            # Total number of containers on this host -per deployment-
+                            'depl_count'       : dict(),
+                            # Total number of containers on this host
+                            'container_count'  : 0,
+                            'oag'              : host.clone()[i],
+                            'slot_factor'      : host.memory * host.cpus
+                        }
+            return rmatrix
+
+        def bin_capability_in_resource_matrix(cap, site, hostname, deployment, o_rmatrix):
+            o_rmatrix[site][hostname]['slot_factor'] -= cap.slot_factor
+            o_rmatrix[site][hostname]['container_count'] += 1
+
+            try:
+                o_rmatrix[site][hostname]['depl_count'][depl.name]
+            except KeyError:
+                o_rmatrix[site][hostname]['depl_count'][depl.name] = 0
+            o_rmatrix[site][hostname]['depl_count'][depl.name] +=1
+
+        rmatrix = init_resource_matrix()
 
         # Containers are placed deployment first, site second. Affinity free
         # definitions are placed wherever there is room. If resources are not
@@ -551,24 +567,24 @@ class OAG_Domain(OAG_FriezeRoot):
         for depl in self.deployment:
 
             if depl.capability:
+
                 # Place site specific capabilities first
                 caps_with_affinity = depl.capability.clone().rdf.filter(lambda x: x.affinity is not None)
                 for cap in caps_with_affinity:
-                    site_slot_factor = sum([host['slot_factor'] for hostname, host in resources[cap.affinity.shortname].items()])
+                    site_slot_factor = sum([host['slot_factor'] for hostname, host in rmatrix[cap.affinity.shortname].items()])
                     if site_slot_factor<cap.slot_factor:
                         unplaceable_caps.append((cap.affinity.id, cap.fqdn))
                         continue
 
-                    for hostname, host in resources[cap.affinity.shortname].items():
+                    for hostname, host in rmatrix[cap.affinity.shortname].items():
                         if host['slot_factor']-cap.slot_factor>=0:
-                            resources[cap.affinity.shortname][hostname]['slot_factor'] -= cap.slot_factor
-                            resources[cap.affinity.shortname][hostname]['container_count'] += 1
+                            bin_capability_in_resource_matrix(cap, cap.affinity.shortname, hostname, depl, rmatrix)
                             containers.append([
                                 cap.clone(),
                                 site.clone(),
                                 host['oag'].clone(),
                                 depl.clone(),
-                                resources[cap.affinity.shortname][hostname]['container_count']
+                                rmatrix[cap.affinity.shortname][hostname]['depl_count'][depl.name],
                             ])
                             break
 
@@ -578,25 +594,24 @@ class OAG_Domain(OAG_FriezeRoot):
                     site_loop_break = False
 
                     domain_slot_factor = 0
-                    for site, hostinfo in resources.items():
+                    for site, hostinfo in rmatrix.items():
                         domain_slot_factor += sum([host['slot_factor'] for hostname, host in hostinfo.items()])
                     if domain_slot_factor<cap.slot_factor:
                         unplaceable_caps.append(('no-affinity', cap.fqdn))
                         continue
 
-                    for site, hostinfo in resources.items():
+                    for site, hostinfo in rmatrix.items():
                         if site_loop_break:
                             break
                         for hostname, host in hostinfo.items():
                             if host['slot_factor']-cap.slot_factor>=0:
-                                resources[site][hostname]['slot_factor'] -= cap.slot_factor
-                                resources[site][hostname]['container_count'] += 1
+                                bin_capability_in_resource_matrix(cap, site, hostname, depl, rmatrix)
                                 containers.append([
                                     cap.clone(),
                                     OAG_Site((self, site), 'by_shortname')[0],
                                     host['oag'].clone(),
                                     depl.clone(),
-                                    resources[site][hostname]['container_count']
+                                    rmatrix[site][hostname]['depl_count'][depl.name],
                                 ])
                                 site_loop_break = True
                                 break
