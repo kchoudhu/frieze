@@ -1,0 +1,8 @@
+>>/usr/local/etc/namedb/named.conf.local
+# Forward lookups
+% for zone, file in zones.items():
+zone "${zone}" {
+    type master;
+    file "${file}"
+}
+% endfor

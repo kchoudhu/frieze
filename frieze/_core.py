@@ -26,7 +26,7 @@ from openarc.exception import OAGraphRetrieveError, OAError
 
 from frieze.auth import CertAuth, CertFormat
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
-from frieze.capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc, bird, dhcpd
+from frieze.capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc, bird, dhcpd, named
 
 #### Helper functions
 
@@ -212,7 +212,11 @@ class OAG_Capability(OAG_FriezeRoot):
 
     @property
     def fqdn(self):
-        return "%s%d.%s.%s" % (self.service, self.stripe, self.deployment.name, self.deployment.domain.domain)
+        return "%s.%s.%s" % (self.name, self.deployment.name, self.deployment.domain.domain)
+
+    @property
+    def name(self):
+        return "%s%d" % (self.service, self.stripe)
 
     @property
     def package(self):
@@ -270,9 +274,12 @@ class OAG_Container(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'capability'  : [ OAG_Capability, True,  None ],
+        'capability'  : [ OAG_Capability,  True,  None ],
         'site'        : [ OAG_Site,        True,  None ],
         'host'        : [ OAG_Host,        True,  None ],
+        'deployment'  : [ OAG_Deployment,  True,  None ],
+        # The order in which this item was placed on this host
+        'seqnum'      : ['int',            True,  None ],
     }
 
     @property
@@ -282,6 +289,18 @@ class OAG_Container(OAG_FriezeRoot):
     @property
     def fqdn(self):
         return self.capability.fqdn
+
+    def ip4(self):
+        """Find appropriate VLAN and dynamically generate this container's
+        IP address based on its host subnet sequence number"""
+        for iface in self.host.internal_ifaces:
+            if self.deployment.vlan!=iface.name:
+                continue
+            return str(iface.subnet.ip4network[self.seqnum+1])
+
+    @property
+    def name(self):
+        return self.capability.name
 
 class OAG_Deployment(OAG_FriezeRoot):
     @staticproperty
@@ -298,6 +317,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'domain'   : [ OAG_Domain, True,  None ],
+        'seqnum'   : [ 'int',      True,  None ],
         'name'     : [ 'text',     True,  None ],
     }
 
@@ -353,11 +373,19 @@ class OAG_Deployment(OAG_FriezeRoot):
 
     @property
     def containers(self):
-        containers = {}
-        if self.capability:
-            for cap in self.capability:
-                containers[cap.fqdn] = cap.clone()
-        return containers
+        return self.domain.containers.clone().rdf.filter(lambda x: x.deployment.id==self.id)
+
+    @property
+    def rununits(self):
+        return self.containers
+
+    @property
+    def vlan(self):
+        return 'vlan%d' % (self.seqnum+1)
+
+    @property
+    def zone(self):
+        return '%s.%s' % (self.name, self.domain.domain)
 
 class OAG_Domain(OAG_FriezeRoot):
     @staticproperty
@@ -389,15 +417,21 @@ class OAG_Domain(OAG_FriezeRoot):
         try:
             depl = OAG_Deployment((self, name), 'by_name')
         except OAGraphRetrieveError:
+            try:
+                seqnum = self.deployment.size
+            except AttributeError:
+                seqnum = 0
+
             depl =\
                 OAG_Deployment().db.create({
                     'domain'    : self,
+                    'seqnum'    : seqnum,
                     'name'      : name
                 })
 
             for site in self.site:
                 for host in site.host:
-                    host.add_iface('vlan%d' % depl.id, False, hostiface=host.internal_ifaces[0], type_=NetifType.VLAN)
+                    host.add_iface('vlan%d' % depl.id, False, hostiface=host.internal_ifaces[0], type_=NetifType.VLAN, deployment=depl)
 
         return depl
 
@@ -424,7 +458,7 @@ class OAG_Domain(OAG_FriezeRoot):
             print("Not refreshing certificate authority")
 
     @friezetxn
-    def assign_subnet(self, type_, hosts_expected=254, iface=None, dynamic_hosts=0):
+    def assign_subnet(self, type_, hosts_expected=254, iface=None, dynamic_hosts=0, deployment=None):
 
 
         # Calculate smallest possible prefix that can accommodate number of
@@ -440,8 +474,8 @@ class OAG_Domain(OAG_FriezeRoot):
             root_network    = '172.16.0.0'
             root_prefixlen  =  12
         else:
-            root_network    = '10.0.0.0'
-            root_prefixlen  =  8
+            root_network    = '10.%d.0.0' % deployment.seqnum
+            root_prefixlen  =  16
 
         root_subnet = ipaddress.IPv4Network('%s/%s' % (root_network, root_prefixlen))
 
@@ -499,12 +533,16 @@ class OAG_Domain(OAG_FriezeRoot):
                 try:
                     resources[site.shortname][host.fqdn]
                 except KeyError:
-                    resources[site.shortname][host.fqdn] = host.clone()[i]
+                    resources[site.shortname][host.fqdn] = {
+                        'container_count' : 0,
+                        'oag'             : host.clone()[i],
+                        'slot_factor'     : host.memory * host.cpus
+                    }
 
         # Containers are placed deployment first, site second. Affinity free
         # definitions are placed wherever there is room. If resources are not
         # available, they are not entered in the capability mapping
-        containers = [['capability', 'site', 'host']]
+        containers = [list(OAG_Container.streams.keys())]
         unplaceable_caps = []
         for depl in self.deployment:
 
@@ -512,15 +550,22 @@ class OAG_Domain(OAG_FriezeRoot):
                 # Place site specific capabilities first
                 caps_with_affinity = depl.capability.clone().rdf.filter(lambda x: x.affinity is not None)
                 for cap in caps_with_affinity:
-                    site_slot_factor = sum([host.slot_factor for hostname, host in resources[cap.affinity.shortname].items()])
+                    site_slot_factor = sum([host['slot_factor'] for hostname, host in resources[cap.affinity.shortname].items()])
                     if site_slot_factor<cap.slot_factor:
                         unplaceable_caps.append((cap.affinity.id, cap.fqdn))
                         continue
 
                     for hostname, host in resources[cap.affinity.shortname].items():
-                        if host.slot_factor-cap.slot_factor>=0:
-                            resources[cap.affinity.shortname][hostname].slot_factor -= cap.slot_factor
-                            containers.append([cap.clone(), site.clone(), host.clone()])
+                        if host['slot_factor']-cap.slot_factor>=0:
+                            resources[cap.affinity.shortname][hostname]['slot_factor'] -= cap.slot_factor
+                            resources[cap.affinity.shortname][hostname]['container_count'] += 1
+                            containers.append([
+                                cap.clone(),
+                                site.clone(),
+                                host['oag'].clone(),
+                                depl.clone(),
+                                resources[cap.affinity.shortname][hostname]['container_count']
+                            ])
                             break
 
                 # Distribute affinity-free resources next
@@ -530,7 +575,7 @@ class OAG_Domain(OAG_FriezeRoot):
 
                     domain_slot_factor = 0
                     for site, hostinfo in resources.items():
-                        domain_slot_factor += sum([host.slot_factor for hostname, host in hostinfo.items()])
+                        domain_slot_factor += sum([host['slot_factor'] for hostname, host in hostinfo.items()])
                     if domain_slot_factor<cap.slot_factor:
                         unplaceable_caps.append(('no-affinity', cap.fqdn))
                         continue
@@ -539,9 +584,16 @@ class OAG_Domain(OAG_FriezeRoot):
                         if site_loop_break:
                             break
                         for hostname, host in hostinfo.items():
-                            if host.slot_factor-cap.slot_factor>=0:
-                                resources[site][hostname].slot_factor -= cap.slot_factor
-                                containers.append([cap.clone(), OAG_Site((self, site), 'by_shortname')[0], host.clone()])
+                            if host['slot_factor']-cap.slot_factor>=0:
+                                resources[site][hostname]['slot_factor'] -= cap.slot_factor
+                                resources[site][hostname]['container_count'] += 1
+                                containers.append([
+                                    cap.clone(),
+                                    OAG_Site((self, site), 'by_shortname')[0],
+                                    host['oag'].clone(),
+                                    depl.clone(),
+                                    resources[site][hostname]['container_count']
+                                ])
                                 site_loop_break = True
                                 break
 
@@ -602,9 +654,10 @@ class OAG_Host(OAG_FriezeRoot):
         'name'      : [ 'text',   True, None ],
         'role'      : [ HostRole, True, None ],
         'os'        : [ HostOS,   True, None ],
-        'ip4'       : [ 'text',   None, None ],
-        'gateway'   : [ 'text',   None, None ],
-        'netmask'   : [ 'text',   None, None ],
+        # Enrichment information from cloud provider
+        'c_ip4'     : [ 'text',   None, None ],
+        'c_gateway' : [ 'text',   None, None ],
+        'c_netmask' : [ 'text',   None, None ],
     }
 
     @friezetxn
@@ -651,7 +704,7 @@ class OAG_Host(OAG_FriezeRoot):
         return self
 
     @friezetxn
-    def add_iface(self, name, is_external, fib=FIB.DEFAULT, hostiface=None, type_=NetifType.PHYSICAL, mac=str(), wireless=False):
+    def add_iface(self, name, is_external, fib=FIB.DEFAULT, hostiface=None, type_=NetifType.PHYSICAL, mac=str(), wireless=False, deployment=None):
 
         try:
             iface = OAG_NetIface((self, name), 'by_name')
@@ -703,7 +756,12 @@ class OAG_Host(OAG_FriezeRoot):
 
             # 2. Assign subnets to VLAN that is being created
             if iface.type==NetifType.VLAN:
-                self.site.domain.assign_subnet(SubnetType.DEPLOYMENT, hosts_expected=14, iface=iface)
+                self.site.domain.assign_subnet(
+                    SubnetType.DEPLOYMENT,
+                    deployment=deployment,
+                    hosts_expected=1 if self.is_bastion else 14,
+                    iface=iface
+                )
 
             # 3. Assign networking capabilities: dhclient to be specific.
             dhcp_ifaces = self.physical_ifaces.rdf.filter(lambda x: x.routingstyle==RoutingStyle.DHCP)
@@ -724,7 +782,7 @@ class OAG_Host(OAG_FriezeRoot):
                 # Create remaining required dhclients (i.e. for current interface)
                 for i in range(updated, len(self.fibs)):
                     OAG_Capability().db.create({
-                        'deployment' : None,
+                        'deployment' : deployment,
                         'host' : self,
                         'service' : dhc.name,
                         'stripe' : 0,
@@ -738,9 +796,11 @@ class OAG_Host(OAG_FriezeRoot):
                     })
 
             # 4. Enable dhcpd on bastion (if it exists) -every- time because each newly added interface
-            #    can potentially trigger a dhcpd requirement
+            #    can potentially trigger a dhcpd requirement. Same for named, I guess.
             if self.site.bastion:
                 bastion = self.site.bastion
+
+                # DHCP
                 try:
                     cap_dhcpd = bastion.capability.rdf.filter(lambda x: x.service=='dhcpd') if bastion.capability else bastion.capability
                 except AttributeError:
@@ -755,6 +815,9 @@ class OAG_Host(OAG_FriezeRoot):
                         dhcpd_iface_knob.db.update({
                             'value' : dhcpd_ifaces
                         })
+
+                # Bind/Named
+                bastion.add_capability(named(), enable_state=True)
 
             # 5. If this is an internal interface, enable bird
             if not iface.is_external:
@@ -780,6 +843,10 @@ class OAG_Host(OAG_FriezeRoot):
     def containers(self):
         return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
 
+    @property
+    def domain(self):
+        return self.site.domain
+
     @oagprop
     def fibs(self, **kwargs):
         if self.role==HostRole.SITEBASTION:
@@ -789,11 +856,20 @@ class OAG_Host(OAG_FriezeRoot):
 
     @property
     def fqdn(self):
-        return '%s.%s.%s' % (self.name, self.site.shortname, self.site.domain.domain)
+        return '%s.%s' % (self.name, self.site.zone)
 
     @property
     def internal_ifaces(self):
         return self.net_iface.clone().rdf.filter(lambda x: x.is_external is False)
+
+    def ip4(self, fib=FIB.DEFAULT):
+        """Depending on specified FIB, return relevant IP address. DEFAULT:
+        return IP address of internal interface; WORLD means return IP address
+        provided by cloud provider on external interface"""
+        if fib==FIB.DEFAULT:
+            return self.internal_ifaces[0].ip4
+        else:
+            return self.c_ip4 if self.c_ip4 else str()
 
     @property
     def physical_ifaces(self):
@@ -806,18 +882,6 @@ class OAG_Host(OAG_FriezeRoot):
     @property
     def routed_subnets(self):
         return self.subnet.clone()
-
-    @property
-    def slot_factor(self):
-        try:
-            if self._slot_factor is None:
-                self._slot_factor = self.memory*self.cpus
-        except AttributeError:
-            self._slot_factor = self.memory*self.cpus
-        return self._slot_factor
-    @slot_factor.setter
-    def slot_factor(self, val):
-        self._slot_factor = val
 
 class OAG_NetIface(OAG_FriezeRoot):
 
@@ -879,7 +943,7 @@ class OAG_NetIface(OAG_FriezeRoot):
     @property
     def broadcast(self):
         if self.is_external:
-            return self.host.netmask
+            return self.host.c_netmask
         else:
             return self.routed_subnet.broadcast if self.routed_subnet else None
 
@@ -898,31 +962,31 @@ class OAG_NetIface(OAG_FriezeRoot):
     @property
     def gateway(self):
         if self.is_external:
-            return self.host.gateway
+            return self.host.c_gateway
         else:
             return self.routed_subnet.gateway if self.routed_subnet else None
 
     @property
     def ip4(self):
 
-        ret = None
+        rv = None
 
         if self.is_external:
-            ret = self.host.ip4
+            rv = self.host.c_ip4
         else:
             if not self.is_external:
                 if self.routingstyle==RoutingStyle.STATIC:
                     # This is an interface responsible for assigning IP addresses
                     # to other interfaces on the subnet so its IP address is that
                     # of the subnet it is routing.
-                    ret = self.routed_subnet.gateway if self.routed_subnet else None
+                    rv = str(self.routed_subnet.gateway) if self.routed_subnet else None
                 else:
                     # Only assign IP address to routers that are being routed by
                     # another interface.
                     if self.routed_by:
-                        ret = str(self.routed_by.connected_ifaces[self.infname])
+                        rv = str(self.routed_by.connected_ifaces[self.infname])
 
-        return ret
+        return rv
 
     @property
     def is_gateway(self):
@@ -953,6 +1017,10 @@ class OAG_NetIface(OAG_FriezeRoot):
 
     @staticproperty
     def formatstr(self): return "    %-10s|%-23s|%-17s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
+
+    @property
+    def revzone(self):
+        return '.'.join(reversed(self.ip4.split('.')[:3]))
 
     def summarize(self):
         """Purely informational, shouldn't appear anywhere in production code!"""
@@ -1192,9 +1260,9 @@ class OAG_Site(OAG_FriezeRoot):
             for srv in leave_srv:
                 c_srv = [v for v in existing_csrv if v['label']==srv.fqdn][0]
                 srv.db.update({
-                    'ip4'     : c_srv['ip4'],
-                    'gateway' : c_srv['gateway4'],
-                    'netmask' : c_srv['netmask4']
+                    'c_ip4'     : c_srv['ip4'],
+                    'c_gateway' : c_srv['gateway4'],
+                    'c_netmask' : c_srv['netmask4']
                 })
 
             # Create new servers based on what isn't already present on cloud provider. Spawn
@@ -1209,9 +1277,9 @@ class OAG_Site(OAG_FriezeRoot):
             def blocking_server_create(srv):
                 c_srv = extcloud.server_create(srv, networks=networks, sshkey=sshkey, snapshot=snapshot, label=srv.fqdn)
                 srv.db.update({
-                    'ip4'     : c_srv['ip4'],
-                    'gateway' : c_srv['gateway4'],
-                    'netmask' : c_srv['netmask4']
+                    'c_ip4'     : c_srv['ip4'],
+                    'c_gateway' : c_srv['gateway4'],
+                    'c_netmask' : c_srv['netmask4']
                 })
                 return True
 
@@ -1239,6 +1307,14 @@ class OAG_Site(OAG_FriezeRoot):
         if self.block_storage.size>0:
             for bs in self.block_storage:
                 extcloud.block_attach(bs)
+
+    @property
+    def rununits(self):
+        return self.host
+
+    @property
+    def zone(self):
+        return('%s.%s' % (self.shortname, self.domain.domain))
 
 class OAG_Subnet(OAG_FriezeRoot):
     """Subnets are doled out on a per-domain basis and then assigned to
@@ -1447,7 +1523,7 @@ def set_domain(domain,
                     })
 
                 # Assign a subnet
-                p_domain.assign_subnet(SubnetType.ROUTING, hosts_expected=254)
+                p_domain.assign_subnet(SubnetType.SITE, hosts_expected=254)
 
                 # Generate a certificate authority
                 p_domain.assign_certificate_authority()

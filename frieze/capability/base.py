@@ -5,6 +5,7 @@ __all__ = [
     'dhcpd',
     'gateway',
     'linux',
+    'named',
     'openssh',
     'sshd',
     'zfs',
@@ -106,6 +107,34 @@ class dhclient(CapabilityTemplate):
 class gateway(CapabilityTemplate): pass
 
 class linux(CapabilityTemplate): pass
+
+class named(CapabilityTemplate):
+    package = 'bind912'
+
+    def generate_cfg_files(self, host):
+        rv = {}
+        zones = {}
+
+        pkg_name = 'frieze.capability.resources.%s' % self.name
+
+        # Generate forward lookup files
+        zone_template = pkg.resource_string(pkg_name, 'zone.db').decode()
+        for site in host.site.domain.site:
+            filename = "/usr/local/etc/namedb/dynamic/%s.db" % site.zone
+            zones[site.zone] = filename
+            rv[filename] = mako.template.Template(zone_template).render(zonecontainer=site, forward=True, host=host)
+
+        for deployment in host.site.domain.deployment:
+            filename = "/usr/local/etc/namedb/dynamic/%s.db" % deployment.zone
+            zones[deployment.zone] = filename
+            rv[filename] = mako.template.Template(zone_template).render(zonecontainer=deployment, forward=True, host=host)
+
+        # Generate named.conf.local
+        named_local_template = pkg.resource_string(pkg_name, 'named.conf.local').decode()
+        rv['/usr/local/etc/namedb/named.conf.local'] =\
+            mako.template.Template(named_local_template).render(zones=zones)
+
+        return {**rv, **super().generate_cfg_files(host, __exclude__=['zone.db', 'named.conf.local'])}
 
 class openssh(CapabilityTemplate):
     package = 'openssh'
