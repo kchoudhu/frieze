@@ -376,6 +376,10 @@ class OAG_Deployment(OAG_FriezeRoot):
         return self.domain.containers.clone().rdf.filter(lambda x: x.deployment.id==self.id)
 
     @property
+    def revzone(self):
+        return '%d.10.in-addr.arpa' % (self.seqnum)
+
+    @property
     def rununits(self):
         return self.containers
 
@@ -880,6 +884,10 @@ class OAG_Host(OAG_FriezeRoot):
         return self.role==HostRole.SITEBASTION
 
     @property
+    def revzone(self):
+        return '%s.in-addr.arpa' % '.'.join(reversed(self.ip4().split('.')[:3]))
+
+    @property
     def routed_subnets(self):
         return self.subnet.clone()
 
@@ -1017,10 +1025,6 @@ class OAG_NetIface(OAG_FriezeRoot):
 
     @staticproperty
     def formatstr(self): return "    %-10s|%-23s|%-17s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
-
-    @property
-    def revzone(self):
-        return '.'.join(reversed(self.ip4.split('.')[:3]))
 
     def summarize(self):
         """Purely informational, shouldn't appear anywhere in production code!"""

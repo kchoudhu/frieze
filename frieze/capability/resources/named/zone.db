@@ -1,7 +1,6 @@
 >>/usr/local/etc/namedb/dynamic/${zonecontainer.zone}.db
-<%import frieze%>\
 ;
-; ${'Forward' if forward else 'Reverse'} resolution for <${zonecontainer.zone}>
+; Forward resolution for <${zonecontainer.zone}>
 ;
 $TTL 604800
 @   IN  SOA ${host.fqdn}. administrator.${zonecontainer.domain.domain}. (

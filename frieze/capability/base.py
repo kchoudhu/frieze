@@ -11,6 +11,8 @@ __all__ = [
     'zfs',
 ]
 
+import frieze
+
 import mako.template
 import pkg_resources as pkg
 
@@ -115,26 +117,58 @@ class named(CapabilityTemplate):
         rv = {}
         zones = {}
 
+        # Load some resources
         pkg_name = 'frieze.capability.resources.%s' % self.name
+        zone_template        = pkg.resource_string(pkg_name, 'zone.db').decode()
+        revzone_template     = pkg.resource_string(pkg_name, 'revzone.db').decode()
+        named_local_template = pkg.resource_string(pkg_name, 'named.conf.local').decode()
+
+        # Track reverse zones
+        networks = dict()
 
         # Generate forward lookup files
-        zone_template = pkg.resource_string(pkg_name, 'zone.db').decode()
         for site in host.site.domain.site:
             filename = "/usr/local/etc/namedb/dynamic/%s.db" % site.zone
             zones[site.zone] = filename
-            rv[filename] = mako.template.Template(zone_template).render(zonecontainer=site, forward=True, host=host)
+            rv[filename] = mako.template.Template(zone_template).render(zonecontainer=site, host=host)
+
+            # Break forward lookups into class C's and assign revzones
+            for dhost in site.host:
+                try:
+                    networks[dhost.revzone]
+                except KeyError:
+                    networks[dhost.revzone] = []
+                networks[dhost.revzone].append({
+                    'fqdn'   : dhost.fqdn,
+                    'ip_ext' : dhost.ip4().split('.')[-1]
+                })
 
         for deployment in host.site.domain.deployment:
             filename = "/usr/local/etc/namedb/dynamic/%s.db" % deployment.zone
             zones[deployment.zone] = filename
             rv[filename] = mako.template.Template(zone_template).render(zonecontainer=deployment, forward=True, host=host)
 
+            for container in deployment.containers:
+                try:
+                    networks[deployment.revzone]
+                except KeyError:
+                    networks[deployment.revzone] = []
+
+                networks[deployment.revzone].append({
+                    'fqdn'   : container.fqdn,
+                    'ip_ext' : '.'.join(reversed(container.ip4().split('.')[2:]))
+                })
+
+        for nw, zonehosts in networks.items():
+            filename = "/usr/local/etc/namedb/dynamic/%s.db" % nw
+            zones[nw] = filename
+            rv[filename] = mako.template.Template(revzone_template).render(revzone=nw, zonehosts=zonehosts, host=host)
+
         # Generate named.conf.local
-        named_local_template = pkg.resource_string(pkg_name, 'named.conf.local').decode()
         rv['/usr/local/etc/namedb/named.conf.local'] =\
             mako.template.Template(named_local_template).render(zones=zones)
 
-        return {**rv, **super().generate_cfg_files(host, __exclude__=['zone.db', 'named.conf.local'])}
+        return {**rv, **super().generate_cfg_files(host, __exclude__=['zone.db', 'revzone.db', 'named.conf.local'])}
 
 class openssh(CapabilityTemplate):
     package = 'openssh'

@@ -1,0 +1,16 @@
+>>/usr/local/etc/namedb/dynamic/${revzone}.db
+;
+; Reverse resolution for <${revzone}>
+;
+$TTL 604800
+@   IN  SOA ${host.fqdn}. administrator.${host.site.domain.domain}. (
+          1  ; Serial
+     604800  ; Refresh
+      86400  ; Retry
+    2419200  ; Expire
+     604800  ; Negative Cache TTL
+)
+${'%-30s' % '@'} IN  NS     ns1.${host.site.zone}.
+% for zh in zonehosts:
+${'%-30s'% zh['ip_ext']} IN  PTR    ${zh['fqdn']}.
+% endfor
