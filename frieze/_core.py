@@ -26,7 +26,9 @@ from openarc.exception import OAGraphRetrieveError, OAError
 
 from frieze.auth import CertAuth, CertFormat
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
-from frieze.capability import ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate, dhclient as dhc, bird, dhcpd, named
+from frieze.capability import\
+    ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate,\
+    dhclient as dhc, bird, dhcpd, named, resolvconf
 
 #### Helper functions
 
@@ -191,7 +193,7 @@ class OAG_Capability(OAG_FriezeRoot):
         'stripe'     : [ 'int',          int(), None ],
         'cores'      : [ 'float',        int(), None ],
         'memory'     : [ 'int',          int(), None ],
-        'start_rc'   : [ 'bool',         False, None ],
+        'start_rc'   : [ 'bool',         None,  None ],
         'start_local': [ 'bool',         False, None ],
         'start_local_prms':
                        [ 'text',         None,  None ],
@@ -835,8 +837,12 @@ class OAG_Host(OAG_FriezeRoot):
                             'value' : dhcpd_ifaces
                         })
 
-                # Bind/Named
+                # DNS
                 bastion.add_capability(named(), enable_state=True)
+
+                # Turn off cloud-provided resolvconf
+                for host in self.site.host:
+                    host.add_capability(resolvconf())
 
             # 5. If this is an internal interface, enable bird
             if not iface.is_external:
