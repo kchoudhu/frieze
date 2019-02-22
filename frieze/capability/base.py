@@ -7,6 +7,7 @@ __all__ = [
     'linux',
     'named',
     'openssh',
+    'resolvconf',
     'sshd',
     'zfs',
 ]
@@ -172,6 +173,8 @@ class named(CapabilityTemplate):
 
 class openssh(CapabilityTemplate):
     package = 'openssh'
+
+class resolvconf(CapabilityTemplate): pass
 
 class sshd(CapabilityTemplate): pass
 
