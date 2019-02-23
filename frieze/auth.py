@@ -61,7 +61,7 @@ class CertAuth(object):
     def distribute(self):
         from ._provider import ExtCloud
 
-        # Publish our certificate authority
+        # Publish our certificate authority in SSH form.
         for site in self.domain.site:
             extcloud = ExtCloud(site.provider)
             for key in extcloud.sshkey_list():
@@ -291,11 +291,14 @@ class CertAuth(object):
                 os.makedirs(serialize_to_dir, mode=0o700)
             os.chmod(serialize_to_dir, 0o700)
 
-            id_name = 'id_rsa_%s' % self.domain.domain
-            with open(os.open(os.path.join(serialize_to_dir, '%s.pub' % id_name), os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
-                f.write(serialized_cert)
-            with open(os.open(os.path.join(serialize_to_dir, id_name), os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
+            id_name     = 'id_rsa_%s' % self.domain.domain
+            id_file     = os.path.join(serialize_to_dir, id_name)
+            id_file_pub = os.path.join(serialize_to_dir, '%s.pub' % id_name)
+            with open(os.open(id_file, os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
                 f.write(serialized_privkey)
+            with open(os.open(id_file_pub, os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
+                f.write(serialized_cert)
+            return (id_file, id_file_pub)
         else:
             return (serialized_cert, serialized_privkey)
 
