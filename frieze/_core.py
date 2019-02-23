@@ -972,7 +972,11 @@ class OAG_NetIface(OAG_FriezeRoot):
     @property
     def broadcast(self):
         if self.is_external:
-            return self.host.c_netmask
+            if not self.host.c_ip4:
+                return None
+            else:
+                prefix = ipaddress.IPv4Address(int(ipaddress.IPv4Address(self.host.c_ip4)) & int(ipaddress.IPv4Address(self.host.c_netmask)))
+                return ipaddress.IPv4Network(f'{prefix}/{self.host.c_netmask}').broadcast_address
         else:
             return self.routed_subnet.broadcast if self.routed_subnet else None
 
@@ -1003,23 +1007,42 @@ class OAG_NetIface(OAG_FriezeRoot):
         if self.is_external:
             rv = self.host.c_ip4
         else:
-            if not self.is_external:
-                if self.routingstyle==RoutingStyle.STATIC:
-                    # This is an interface responsible for assigning IP addresses
-                    # to other interfaces on the subnet so its IP address is that
-                    # of the subnet it is routing.
-                    rv = str(self.routed_subnet.gateway) if self.routed_subnet else None
-                else:
-                    # Only assign IP address to routers that are being routed by
-                    # another interface.
-                    if self.routed_by:
-                        rv = str(self.routed_by.connected_ifaces[self.infname])
+            if self.routingstyle==RoutingStyle.STATIC:
+                # This is an interface responsible for assigning IP addresses
+                # to other interfaces on the subnet so its IP address is that
+                # of the subnet it is routing.
+                rv = str(self.routed_subnet.gateway) if self.routed_subnet else None
+            else:
+                # Only assign IP address to routers that are being routed by
+                # another interface.
+                if self.routed_by:
+                    rv = str(self.routed_by.connected_ifaces[self.infname])
 
         return rv
 
     @property
     def is_gateway(self):
         return self.gateway is None
+
+    @property
+    def netmask(self):
+
+        rv = None
+
+        if self.is_external:
+            rv = self.host.c_netmask
+        else:
+            if self.routingstyle==RoutingStyle.STATIC:
+                # This is an interface responsible for assigning IP addresses
+                # to other interfaces on the subnet so its IP address is that
+                # of the subnet it is routing.
+                rv = str(self.routed_subnet.netmask) if self.routed_subnet else None
+            else:
+                # Only assign IP address to routers that are being routed by
+                # another interface.
+                if self.routed_by:
+                    rv = str(self.routed_by.connected_ifaces[self.infname].netmask)
+        return rv
 
     @property
     def routingstyle(self):
@@ -1365,6 +1388,10 @@ class OAG_Subnet(OAG_FriezeRoot):
         'routing_iface' : [ OAG_NetIface, False, None ],
         'dynamic_hosts' : [ 'int',        True,  None ],
     }
+
+    @property
+    def netmask(self):
+        return self.ip4network.netmask
 
     @property
     def broadcast(self):

@@ -119,7 +119,7 @@ class ConfigGenFreeBSD(object):
             if iface.routingstyle==RoutingStyle.DHCP:
                 value = 'DHCP'
             elif iface.routingstyle==RoutingStyle.STATIC:
-                value = 'inet %s netmask %s' % (iface.ip4, iface.broadcast)
+                value = 'inet %s netmask %s' % (iface.ip4, iface.netmask)
             dict_merge(self.cfg, gen_property_config(HostProperty.ifconfig, iface.name, value=value))
 
         # Flatten rc.local into an array of commands to be executed
