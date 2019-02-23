@@ -172,7 +172,7 @@ class named(CapabilityTemplate):
         return {**rv, **super().generate_cfg_files(host, __exclude__=['zone.db', 'revzone.db', 'named.conf.local'])}
 
 class openssh(CapabilityTemplate):
-    package = 'openssh'
+    package = 'openssh-portable'
 
 class resolvconf(CapabilityTemplate): pass
 
