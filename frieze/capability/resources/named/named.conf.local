@@ -3,6 +3,6 @@
 % for zone, file in zones.items():
 zone "${zone}" {
     type master;
-    file "${file}"
-}
+    file "${file}";
+};
 % endfor
