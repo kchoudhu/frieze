@@ -1,4 +1,4 @@
->>/usr/local/etc/namedb/dynamic/${zonecontainer.zone}.db
+>/usr/local/etc/namedb/dynamic/${zonecontainer.zone}.db
 ;
 ; Forward resolution for <${zonecontainer.zone}>
 ;

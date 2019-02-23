@@ -141,21 +141,21 @@ class ConfigGenFreeBSD(object):
                 if type(payload)==dict:
                     src_file = '%05d-%s' % (i, src_file)
                     with open(os.path.join(targetdir, src_file), 'w') as f:
-                        f.write('>>%s\n' % tgt_file.value)
+                        f.write('>%s\n' % tgt_file.value)
                         for k, v in payload.items():
                             f.write('%s="%s"\n' % (k, v))
                 elif type(payload)==list:
                     if tgt_file==ConfigFile.RC_LOCAL:
                         src_file = '%05d-%s' % (i, src_file)
                         with open(os.path.join(targetdir, src_file), 'w') as f:
-                            f.write('>>%s\n' % tgt_file.value)
+                            f.write('>%s\n' % tgt_file.value)
                             for v in payload:
                                 f.write("%s\n" % v)
                     elif tgt_file==ConfigFile.COMMAND_LIST:
                         for j, cmd in enumerate(payload):
                             sequenced_src_file = '%05d-%05d-%s' % (i, j, src_file)
                             with open(os.path.join(targetdir, sequenced_src_file), 'w') as f:
-                                f.write('#!%s' % cmd)
+                                f.write('#!\n%s' % cmd)
                     else:
                         raise OAError("Not a supported filetype")
             else:
