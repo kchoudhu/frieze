@@ -25,18 +25,26 @@ fi
 # If the first two bytes are '>/', the first line contains a path for the
 # rest of the file to be written into.
 if [ "`head -c 2 ${CONFDATA}`" = '>/' ]; then
-        TARGETFILE=`head -1 ${CONFDATA} | cut -c 2-`
+        TARGETFILE=`head -1 ${CONFDATA} | cut -c 2- | awk '{print $1}'`
+        CHMOD=`head -1 ${CONFDATA} | cut -c 2- | awk '{print $2}'`
         mkdir -p `dirname ${TARGETFILE}`
         tail +2 ${CONFDATA} > ${TARGETFILE}
+        if [ ${CHMOD} ]; then
+                chmod ${CHMOD} ${TARGETFILE}
+        fi
         exit 0
 fi
 
 # If the first three bytes are '>>/', the first line contains a path for the
 # rest of the file to be appended into.
 if [ "`head -c 3 ${CONFDATA}`" = '>>/' ]; then
-        TARGETFILE=`head -1 ${CONFDATA} | cut -c 3-`
+        TARGETFILE=`head -1 ${CONFDATA} | cut -c 3- | awk '{print $1}'`
+        CHMOD=`head -1 ${CONFDATA} | cut -c 3- | awk '{print $2}'`
         mkdir -p `dirname ${TARGETFILE}`
         tail +2 ${CONFDATA} >> ${TARGETFILE}
+        if [ ${CHMOD} ]; then
+                chmod ${CHMOD} ${TARGETFILE}
+        fi
         exit 0
 fi
 
