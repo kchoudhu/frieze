@@ -1,4 +1,4 @@
->/usr/local/etc/namedb/named.conf.local
+>/usr/local/etc/namedb/named.conf.local 0644
 # Forward lookups
 % for zone, file in zones.items():
 zone "${zone}" {

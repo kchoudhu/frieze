@@ -1,4 +1,4 @@
->/usr/local/etc/ssh/sshd_config
+>/usr/local/etc/ssh/sshd_config 0644
 TrustedUserCAKeys /usr/local/etc/ssh/ca.pub
 PasswordAuthentication no
 ChallengeResponseAuthentication no

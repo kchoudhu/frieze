@@ -148,7 +148,7 @@ class ConfigGenFreeBSD(object):
                     if tgt_file==ConfigFile.RC_LOCAL:
                         src_file = '%05d-%s' % (i, src_file)
                         with open(os.path.join(targetdir, src_file), 'w') as f:
-                            f.write('>%s\n' % tgt_file.value)
+                            f.write('>%s 0744\n' % tgt_file.value)
                             for v in payload:
                                 f.write("%s\n" % v)
                     elif tgt_file==ConfigFile.COMMAND_LIST:
