@@ -124,7 +124,7 @@ class ConfigGenFreeBSD(object):
 
         # Flatten rc.local into an array of commands to be executed
         try:
-            self.cfg[ConfigFile.RC_LOCAL.value] = [v for k, v in self.cfg[ConfigFile.RC_LOCAL.value].items()]
+            self.cfg[ConfigFile.RC_LOCAL] = [v for k, v in self.cfg[ConfigFile.RC_LOCAL].items()]
         except KeyError:
             pass
 
