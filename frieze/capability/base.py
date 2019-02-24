@@ -58,7 +58,7 @@ class CapabilityTemplate(object):
             cap_cfgs = pkg.resource_listdir('frieze.capability.resources', self.name)
             for cfg in [cfg for cfg in cap_cfgs if cfg not in __exclude__]:
                 cfg_raw = pkg.resource_string('frieze.capability.resources.%s' % self.name, cfg).decode()
-                cfg_name = cfg_raw.split('\n')[0][2:].strip()
+                cfg_name = cfg_raw.split('\n')[0][2:].strip().split()[0]
                 rv[cfg_name] = mako.template.Template(cfg_raw).render(host=host)
         except FileNotFoundError:
             pass
