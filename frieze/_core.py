@@ -723,7 +723,7 @@ class OAG_Host(OAG_FriezeRoot):
 
     @friezetxn
     def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT):
-        """Run an capability on a host. Enable it."""
+        """Run a capability on a host. Enable it."""
         if isinstance(capdef, CapabilityTemplate):
             create = True
             try:
@@ -1183,7 +1183,11 @@ class OAG_Site(OAG_FriezeRoot):
             for cap in template.caps:
                 try:
                     kwargs = {}
-                    (capability, enabled, fibs) = cap
+
+                    (capability, enabled, externally_accessible) = cap
+
+                    # Determine FIB information, set enable status accordingly
+                    fibs = [FIB.WORLD] if (externally_accessible and len(host.fibs)>1) else host.fibs
                     if len(fibs)>1:
                         kwargs['enable_state'] = False
                     else:
