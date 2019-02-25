@@ -88,9 +88,13 @@ class ConfigGenFreeBSD(object):
             return rv
 
         def gen_property_config(prop, *qualifiers, value=None):
+            knob = prop.name
+            if qualifiers:
+                knob = f"{knob}_{'_'.join(qualifiers)}"
+
             return {
                 ConfigFile.RC_CONF : {
-                    '%s_%s' % (prop.name, '_'.join(qualifiers)) : value
+                    knob : value
                 }
             }
 
