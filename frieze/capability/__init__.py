@@ -19,11 +19,15 @@ from ..osinfo import HostOS, OSFamily, TunableType, Tunable
 from ..hostproperty import HostProperty
 
 class ConfigFile(enum.Enum):
-    COMMAND_LIST = 'cmdlist'
-    RC_CONF      = '/etc/rc.conf.local'
-    RC_LOCAL     = '/etc/rc.local'
-    BOOT_LOADER  = '/boot/loader.conf.local'
-    SYSCTL_CONF  = '/etc/sysctl.conf.local'
+    # Commands executed before config payload delivered
+    PRE_COMMAND_LIST  = 'pre_cmdlist'
+    # Configuration payload
+    RC_CONF           = '/etc/rc.conf.local'
+    RC_LOCAL          = '/etc/rc.local'
+    BOOT_LOADER       = '/boot/loader.conf.local'
+    SYSCTL_CONF       = '/etc/sysctl.conf.local'
+    # Commands executed after config payload delivered
+    POST_COMMAND_LIST = 'post_cmdlist'
 
 class ConfigGenFreeBSD(object):
     def __init__(self, host):
@@ -99,9 +103,9 @@ class ConfigGenFreeBSD(object):
                     dct[k] = merge_dct[k]
 
         # Install packages to begin with
-        self.cfg[ConfigFile.COMMAND_LIST] = []
+        self.cfg[ConfigFile.PRE_COMMAND_LIST] = []
         install_pkgs = [c.package for c in self.host.capability if c.package]
-        self.cfg[ConfigFile.COMMAND_LIST].append('yes | pkg install '+ ' '.join(install_pkgs))
+        self.cfg[ConfigFile.PRE_COMMAND_LIST].append('yes | pkg install '+ ' '.join(install_pkgs))
 
         # What about those tunables!
         for tunable in self.host.sysctl:
@@ -128,6 +132,14 @@ class ConfigGenFreeBSD(object):
         except KeyError:
             pass
 
+        # Add post processing
+        be_name = self.host.domain.version_name.lower().replace(' ', '_')
+        self.cfg[ConfigFile.POST_COMMAND_LIST] = [
+            f'bectl create {be_name}',
+            f'bectl activate {be_name}',
+            f'shutdown -r now'
+        ]
+
         return self
 
     def emit_output(self, targetdir):
@@ -151,7 +163,7 @@ class ConfigGenFreeBSD(object):
                             f.write('>%s 0744\n' % tgt_file.value)
                             for v in payload:
                                 f.write("%s\n" % v)
-                    elif tgt_file==ConfigFile.COMMAND_LIST:
+                    elif tgt_file in (ConfigFile.PRE_COMMAND_LIST, ConfigFile.POST_COMMAND_LIST):
                         for j, cmd in enumerate(payload):
                             sequenced_src_file = '%05d-%05d-%s' % (i, j, src_file)
                             with open(os.path.join(targetdir, sequenced_src_file), 'w') as f:

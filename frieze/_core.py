@@ -14,7 +14,9 @@ import os
 import pkg_resources as pkg
 import pwd
 import shutil
+import subprocess
 import tarfile
+import tempfile
 import toml
 
 from pprint import pprint
@@ -626,19 +628,57 @@ class OAG_Domain(OAG_FriezeRoot):
 
     def deploy(self, push=True, version_name=str()):
 
-        if self.is_frozen:
-            # Distribute the cert authority first so that we can link
-            # them to the servers that are going to be set up shortly
-            if push:
-                self.certauthority.distribute()
-
-            for site in self.site:
-                if push:
-                    site.prepare_infrastructure()
-
-                site.configure(push=push)
-        else:
+        if not self.is_frozen:
             raise OAError("Can't deploy domain that hasn't been snapshotted")
+
+        # If you aren't pushing, just generate the files and return
+        if not push:
+            tar_files = {}
+            for site in self.site:
+                tar_files = {**tar_files, **site.configure()}
+            return
+
+        # Atomically distribute the cert authority to all sites so that
+        # we can link them to the servers that are going to be set up
+        # shortly
+        self.certauthority.distribute()
+
+        # Issue command to create hosts, networking between them, and
+        # storage.
+        for site in self.site:
+            site.prepare_infrastructure()
+
+        # Issue SSH credential and use it to push to all hosts. Wrap in tempfile
+        # to ensure that files are wiped out after context manager __exit__s.
+        with tempfile.TemporaryDirectory() as td:
+
+            # Generate configs
+            tar_files = {}
+            for site in self.site:
+                tar_files = {**tar_files, **site.configure()}
+
+            # SSH credential creation
+            user = pwd.getpwuid(os.getuid())[0]
+            command = 'Deploy {%s:%s}' % (self.domain, self.version_name)
+            ssh_dir = os.path.join(td, '.ssh')
+            (id_file, id_file_pub) = self.certauthority.issue_ssh_certificate(user, command, serialize_to_dir=ssh_dir)
+
+            # create tarballs
+            for host, host_cfgdir in tar_files.items():
+                host_address      = host.db.search()[-1].ip4(fib=FIB.WORLD)
+                host_tarfile      = f'{host.fqdn}.tar.bz2'
+                host_tarfile_path = os.path.join(td, host_tarfile)
+
+                os.chdir(host_cfgdir)
+                with tarfile.open(host_tarfile_path, "w:bz2") as tar:
+                    for file in os.listdir(host_cfgdir):
+                        tar.add(file)
+
+                with open(host_tarfile_path, 'rb') as f:
+                    print("Pushing configuration for: %s (%s)" % (host.fqdn, host_address))
+                    cmd = f'ssh root@{host.ip4(fib=FIB.WORLD)} -i {id_file} "cat > {host_tarfile} && configinit {host_tarfile}"'
+                    print("  %s" % cmd)
+                    output = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f.read())
 
     @property
     def is_frozen(self):
@@ -1192,28 +1232,16 @@ class OAG_Site(OAG_FriezeRoot):
         else:
             return None
 
-    def configure(self, push=True):
+    def configure(self):
 
         # Decide on directory to output files to
         version_dir = os.path.join(openarc.env.getenv().runprops['home'], 'domains', self.domain.domain, 'deploy', self.domain.version_name)
 
-        # Fresh start: version deployment directory
-        version_deploy_dir = os.path.join(version_dir, 'dist')
-        try:
-            shutil.rmtree(version_deploy_dir)
-        except FileNotFoundError:
-            pass
-        os.makedirs(version_deploy_dir, exist_ok=True)
-
-        # Create new SSH credentials for this deployment if we are pushing
-        if push:
-            user = pwd.getpwuid(os.getuid())[0]
-            command = 'Deploy {%s:%s}' % (self.domain.domain, self.domain.version_name)
-            self.domain.certauthority.issue_ssh_certificate(user, command, serialize_to_dir=os.path.join(version_dir, '.ssh'))
-
         # Create configurations for each host. The configurations contain a
         # full suite of config files,
-        for host in self.host:
+        host_tars = {}
+
+        for i, host in enumerate(self.host.db.search()):
 
             # Fresh start: host config directory
             host_cfg_dir = os.path.join(version_dir, host.fqdn)
@@ -1223,17 +1251,12 @@ class OAG_Site(OAG_FriezeRoot):
                 pass
             os.makedirs(host_cfg_dir)
 
-            # Generate host config
+            # Generate host config, ensuring freshest view
             host.configure(host_cfg_dir)
 
-            # Create deployable archives
-            host_tar_file = os.path.join(version_deploy_dir, '%s.tar.bz2' % host.fqdn)
-            with tarfile.open(host_tar_file, "w:bz2") as tar:
-                tar.add(host_cfg_dir)
+            host_tars[OAG_Host(host.id)] = host_cfg_dir
 
-            # Use Ansible to compress and deploy manifest to each host
-            if push:
-                pass
+        return host_tars
 
     @property
     def containers(self):
