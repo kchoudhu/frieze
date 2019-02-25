@@ -7,5 +7,6 @@ __all__ = [
 import enum
 
 class HostProperty(enum.Enum):
-    hostname      = 1
-    ifconfig      = 2
+    hostname          = 1
+    ifconfig          = 2
+    cloned_interfaces = 3

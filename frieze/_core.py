@@ -389,7 +389,11 @@ class OAG_Deployment(OAG_FriezeRoot):
 
     @property
     def vlan(self):
-        return 'vlan%d' % (self.seqnum+1)
+        return 'vlan%d' % (self.vlanid-1)
+
+    @property
+    def vlanid(self):
+        return self.seqnum+1
 
     @property
     def zone(self):
@@ -439,7 +443,7 @@ class OAG_Domain(OAG_FriezeRoot):
 
             for site in self.site:
                 for host in site.host:
-                    host.add_iface('vlan%d' % depl.id, False, hostiface=host.internal_ifaces[0], type_=NetifType.VLAN, deployment=depl)
+                    host.add_iface(depl.vlan, False, hostiface=host.internal_ifaces[0], type_=NetifType.VLAN, deployment=depl)
 
         return depl
 
@@ -779,6 +783,7 @@ class OAG_Host(OAG_FriezeRoot):
                     'fib'         : fib,
                     'is_external' : is_external,
                     'wireless'    : wireless,
+                    'deployment'  : deployment,
                 })
 
             # If it's a VLAN, fib is the same is the host interface
@@ -969,7 +974,7 @@ class OAG_NetIface(OAG_FriezeRoot):
     def streams(cls): return {
         'host'        : [ OAG_Host,     True,  None ],
         'name'        : [ 'text',       True,  None ],
-        'type'        : [ NetifType,      True,  None ],
+        'type'        : [ NetifType,    True,  None ],
         'mac'         : [ 'text',       None,  None ],
         # Is connected to the internet
         'is_external' : [ 'boolean',    False, None ],
@@ -983,6 +988,8 @@ class OAG_NetIface(OAG_FriezeRoot):
         'vlanhost'    : [ OAG_NetIface, False, None ],
         # Interface which routes traffic from this interface
         'routed_by'   : [ OAG_NetIface, False, None ],
+        # Deployment
+        'deployment'  : [ OAG_Deployment, False, None ]
     }
 
     @property
