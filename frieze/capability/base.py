@@ -9,7 +9,6 @@ __all__ = [
     'openssh',
     'resolvconf',
     'sshd',
-    'zfs',
 ]
 
 import frieze
@@ -177,5 +176,3 @@ class openssh(CapabilityTemplate):
 class resolvconf(CapabilityTemplate): pass
 
 class sshd(CapabilityTemplate): pass
-
-class zfs(CapabilityTemplate): pass

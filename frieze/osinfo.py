@@ -43,7 +43,6 @@ class Tunable(enum.Enum):
     NET_FIBS               = 16001
     # kern       17000-18999 (1034)
     # kmods      19000-19999 (1000)
-    ZFS                    = 19000
 
     @property
     def family(self):
