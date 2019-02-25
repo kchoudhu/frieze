@@ -254,7 +254,7 @@ class OAG_CapabilityKnob(OAG_FriezeRoot):
         'value'      : [ 'text',         True,  None ],
     }
 
-class OAG_CapRequiredMount(OAG_FriezeRoot):
+class OAG_CapabilityRequiredMount(OAG_FriezeRoot):
 
     @staticproperty
     def context(cls): return "frieze"
@@ -365,7 +365,7 @@ class OAG_Deployment(OAG_FriezeRoot):
 
                     for (mount, size_gb) in capdef.mounts:
                         capmount =\
-                            OAG_CapRequiredMount().db.create({
+                            OAG_CapabilityRequiredMount().db.create({
                                 'cap' : cap,
                                 'mount' : mount,
                                 'size_gb' : size_gb,
@@ -1472,7 +1472,7 @@ class OAG_SysMount(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'container_name' : [ 'text',   True, None ],
-        'capmnt'         : [ OAG_CapRequiredMount, True, None ],
+        'capmnt'         : [ OAG_CapabilityRequiredMount, True, None ],
         'host'           : [ OAG_Host, True, None ]
     }
 
