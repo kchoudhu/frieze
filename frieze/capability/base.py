@@ -7,6 +7,8 @@ __all__ = [
     'linux',
     'named',
     'openssh',
+    'pf',
+    'pflog',
     'resolvconf',
     'sshd',
 ]
@@ -169,6 +171,10 @@ class named(CapabilityTemplate):
             mako.template.Template(named_local_template).render(zones=zones)
 
         return {**rv, **super().generate_cfg_files(host, __exclude__=['zone.db', 'revzone.db', 'named.conf.local'])}
+
+class pf(CapabilityTemplate): pass
+
+class pflog(CapabilityTemplate): pass
 
 class openssh(CapabilityTemplate):
     package = 'openssh-portable'

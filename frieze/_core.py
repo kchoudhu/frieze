@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'NetifType', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB']
+__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'NetifType', 'SubnetType', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB']
 
 import base64
 import collections
@@ -30,7 +30,7 @@ from frieze.auth import CertAuth, CertFormat
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
 from frieze.capability import\
     ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate,\
-    dhclient as dhc, bird, dhcpd, named, resolvconf
+    dhclient as dhc, bird, dhcpd, gateway, named, pf, pflog, resolvconf
 
 #### Helper functions
 
@@ -913,6 +913,15 @@ class OAG_Host(OAG_FriezeRoot):
     def containers(self):
         return self.site.domain.clone()[-1].containers.rdf.filter(lambda x: x.host.id==self.id)
 
+    def default_gateway(self, fib=FIB.DEFAULT):
+        for iface in self.physical_ifaces:
+            if self.role==HostRole.SITEBASTION:
+                if iface.is_external:
+                    return iface
+            else:
+                if not iface.is_external and iface.fib==fib:
+                    return iface
+
     @property
     def domain(self):
         return self.site.domain
@@ -1185,6 +1194,11 @@ class OAG_Site(OAG_FriezeRoot):
                     })
                 else:
                     print("[%s] tunable not compatible with [%s]" % (sysctl[0], host.os))
+
+            # Turn on forwarding and pf by default: EVERY host is a router
+            host.add_capability(gateway(), enable_state=True)
+            host.add_capability(pf(), enable_state=True)
+            host.add_capability(pflog(), enable_state=True)
 
             # On host (i.e. bare metal, non-jailed) processes
             for cap in template.caps:
