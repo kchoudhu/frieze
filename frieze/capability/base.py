@@ -4,6 +4,7 @@ __all__ = [
     'dhclient',
     'dhcpd',
     'gateway',
+    'jail',
     'linux',
     'named',
     'openssh',
@@ -56,10 +57,16 @@ class CapabilityTemplate(object):
         __exclude__.append('__init__.py')
         __exclude__.append('__pycache__')
         try:
+            cmd_cnt = 0
             cap_cfgs = pkg.resource_listdir('frieze.capability.resources', self.name)
             for cfg in [cfg for cfg in cap_cfgs if cfg not in __exclude__]:
                 cfg_raw = pkg.resource_string('frieze.capability.resources.%s' % self.name, cfg).decode()
-                cfg_name = cfg_raw.split('\n')[0][2:].strip().split()[0]
+                cfg_taste = cfg_raw.split('\n')[0]
+                if cfg_taste[0:2]=='#!':
+                    cfg_name = '%s_cmd_%d.sh' % (self.name, cmd_cnt)
+                    cmd_cnt+=1
+                else:
+                    cfg_name = cfg_taste[2:].strip().split()[0]
                 rv[cfg_name] = mako.template.Template(cfg_raw).render(host=host)
         except FileNotFoundError:
             pass
@@ -109,6 +116,8 @@ class dhclient(CapabilityTemplate):
     jailable = False
 
 class gateway(CapabilityTemplate): pass
+
+class jail(CapabilityTemplate): pass
 
 class linux(CapabilityTemplate): pass
 

@@ -30,7 +30,7 @@ from frieze.auth import CertAuth, CertFormat
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
 from frieze.capability import\
     ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate,\
-    dhclient as dhc, bird, dhcpd, gateway, named, pf, pflog, resolvconf
+    dhclient as dhc, bird, dhcpd, gateway, jail, named, pf, pflog, resolvconf
 
 #### Helper functions
 
@@ -1199,6 +1199,8 @@ class OAG_Site(OAG_FriezeRoot):
             host.add_capability(gateway(), enable_state=True)
             host.add_capability(pf(), enable_state=True)
             host.add_capability(pflog(), enable_state=True)
+            if host.role==HostRole.COMPUTE:
+                host.add_capability(jail(), enable_state=True)
 
             # On host (i.e. bare metal, non-jailed) processes
             for cap in template.caps:
