@@ -1,5 +1,5 @@
 #!/bin/sh -e
-
+${"""
 # Don't let freebsd-update block on pager
 export PAGER=cat
 
@@ -179,3 +179,4 @@ create_layer_0_zfs
 create_layer_1_release
 create_layer_2_base
 create_layer_3_skeleton
+"""}
