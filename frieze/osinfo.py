@@ -19,6 +19,12 @@ class HostOS(enum.Enum):
             2 : OSFamily.Linux
         }[self.value//10000]
 
+    @property
+    def release_name(self):
+        return {
+            OSFamily.FreeBSD : f'{(self.value%10000)/100}-RELEASE'
+        }[self.family]
+
 class TunableType(enum.Enum):
     BOOT    = 1
     RUNTIME = 2
