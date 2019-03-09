@@ -1,10 +1,10 @@
 #!/bin/sh -e
-${"""
+
+# OS base to create
+OS_JAIL=${host.os.release_name}
+<%text>
 # Don't let freebsd-update block on pager
 export PAGER=cat
-
-DATE=`date +"%Y%m%d%H%M%S"`
-OS_JAIL=12.0-RELEASE
 
 #### Root datasets
 DS_JAIL=zroot/jails
@@ -64,7 +64,7 @@ create_layer_1_release(){
     echo "Creating RELEASE snapshot for ${OS_JAIL}"
 
     RELEASE_MP=`zfs_mountpoint ${RELEASE_DS}`
-    RELEASE_SNAP=${RELEASE_DS}@${DATE}
+    RELEASE_SNAP=${RELEASE_DS}@$`date +"%Y%m%d%H%M%S"`
     SENTINEL_L1_DIR=${RELEASE_MP}/sentinel
     SENTINEL_L1_DONE=${SENTINEL_L1_DIR}/layer-1
 
@@ -179,4 +179,4 @@ create_layer_0_zfs
 create_layer_1_release
 create_layer_2_base
 create_layer_3_skeleton
-"""}
+</%text>\
