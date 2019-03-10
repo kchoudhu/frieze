@@ -64,7 +64,7 @@ create_layer_1_release(){
     echo "Creating RELEASE snapshot for ${OS_JAIL}"
 
     RELEASE_MP=`zfs_mountpoint ${RELEASE_DS}`
-    RELEASE_SNAP=${RELEASE_DS}@$`date +"%Y%m%d%H%M%S"`
+    RELEASE_SNAP=${RELEASE_DS}@`date +"%Y%m%d%H%M%S"`
     SENTINEL_L1_DIR=${RELEASE_MP}/sentinel
     SENTINEL_L1_DONE=${SENTINEL_L1_DIR}/layer-1
 

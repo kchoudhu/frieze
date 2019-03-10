@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 
-__all__ = ['Domain', 'Site', 'Host', 'HostRole', 'Deployment', 'Netif', 'NetifType', 'SubnetType', 'HostTemplate', 'set_domain', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB']
+__all__ = [
+    'Domain',
+    'Site',
+    'Host',
+    'HostTemplate', 'HostRole', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB',
+    'Netif', 'NetifType', 'SubnetType',
+    'Deployment',
+    'Container',
+    'set_domain'
+]
 
 import base64
 import collections
@@ -270,6 +279,13 @@ class OAG_CapabilityRequiredMount(OAG_FriezeRoot):
     }
 
 class OAG_Container(OAG_FriezeRoot):
+
+    class DataLayer(enum.Enum):
+        RELEASE  = 1
+        BASE     = 2
+        SKELETON = 3
+        THINJAIL = 4
+
     @staticproperty
     def context(cls): return "frieze"
 
@@ -290,6 +306,19 @@ class OAG_Container(OAG_FriezeRoot):
     def block_storage(self):
         return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
+    def dataset(self, layer, mountpoint=False):
+        dsname = {
+            Container.DataLayer.RELEASE : f'release/{self.os.release_name}',
+            Container.DataLayer.BASE:     f'base/{self.os.release_name}',
+            Container.DataLayer.SKELETON: f'skeleton/{self.os.release_name}',
+            Container.DataLayer.THINJAIL: f'thinjail/{self.deployment.name}/{self.capability.name}'
+        }[layer]
+
+        if not mountpoint:
+            return f'zroot/jails/{dsname}'
+        else:
+            return f'/usr/local/jails/{dsname}'
+
     @property
     def fqdn(self):
         return self.capability.fqdn
@@ -303,8 +332,21 @@ class OAG_Container(OAG_FriezeRoot):
             return str(iface.subnet.ip4network[self.seqnum+1])
 
     @property
+    def jaildir(self):
+        return f'/usr/local/jails/{self.deployment.name}/{self.capability.name}'
+
+    @property
     def name(self):
         return self.capability.name
+
+    @property
+    def os(self):
+        """For now, only support jails that are the same as host os"""
+        return self.host.os
+
+    @property
+    def sysname(self):
+        return f'{self.deployment.name}_{self.capability.name}'
 
 class OAG_Deployment(OAG_FriezeRoot):
     @staticproperty
@@ -1540,6 +1582,7 @@ Netif = OAG_NetIface
 Domain = OAG_Domain
 Site = OAG_Site
 Deployment = OAG_Deployment
+Container = OAG_Container
 
 ####### User API goes here
 

@@ -1,0 +1,4 @@
+#!/bin/sh -e
+<%import frieze%>\
+mkdir -p ${container.jaildir}
+zfs clone -p ${container.dataset(frieze.Container.DataLayer.SKELETON)}@skeleton ${container.dataset(frieze.Container.DataLayer.THINJAIL)}

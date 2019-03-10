@@ -51,6 +51,12 @@ class CapabilityTemplate(object):
 
     def __init__(self):
         self.set_knobs = {}
+        self.cmd_count = 0
+
+    def next_cmd_cfg_name(self):
+        cfg_name = f'{self.name}_cmd_{self.cmd_count}'
+        self.cmd_count += 1
+        return cfg_name
 
     def generate_cfg_files(self, host, __exclude__=[]):
         rv = {}
@@ -63,8 +69,7 @@ class CapabilityTemplate(object):
                 cfg_raw = pkg.resource_string('frieze.capability.resources.%s' % self.name, cfg).decode()
                 cfg_taste = cfg_raw.split('\n')[0]
                 if cfg_taste[0:2]=='#!':
-                    cfg_name = '%s_cmd_%d.sh' % (self.name, cmd_cnt)
-                    cmd_cnt+=1
+                    cfg_name = self.next_cmd_cfg_name()
                 else:
                     cfg_name = cfg_taste[2:].strip().split()[0]
                 rv[cfg_name] = mako.template.Template(cfg_raw).render(host=host)
@@ -117,7 +122,22 @@ class dhclient(CapabilityTemplate):
 
 class gateway(CapabilityTemplate): pass
 
-class jail(CapabilityTemplate): pass
+class jail(CapabilityTemplate):
+
+    def generate_cfg_files(self, host):
+        """Generate regular files, and then add in fstabs for individual jails """
+        rv = super().generate_cfg_files(host, __exclude__=['jail-fstab', 'jail-zfs-skeleton'])
+
+        pkg_name = 'frieze.capability.resources.%s' % self.name
+        jail_zfs_template   = pkg.resource_string(pkg_name, 'jail-zfs-skeleton').decode()
+        jail_fstab_template = pkg.resource_string(pkg_name, 'jail-fstab').decode()
+
+        for container in host.containers:
+            filename = f'/usr/local/jails/{container.sysname}.fstab'
+            rv[self.next_cmd_cfg_name()] = mako.template.Template(jail_zfs_template).render(container=container, host=host)
+            rv[filename] = mako.template.Template(jail_fstab_template).render(container=container, host=host)
+
+        return rv
 
 class linux(CapabilityTemplate): pass
 

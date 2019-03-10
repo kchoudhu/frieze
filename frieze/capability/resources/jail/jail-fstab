@@ -1,0 +1,4 @@
+>/usr/local/jails/${container.deployment.name}_${container.capability.name}.fstab 0644
+<%import frieze%>\
+${container.dataset(frieze.Container.DataLayer.BASE, mountpoint=True)} ${container.jaildir}/   nullfs  ro  0   0
+${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)} ${container.jaildir}/skeleton nullfs rw  0   0
