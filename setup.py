@@ -15,6 +15,7 @@ setup(name='frieze',
       author_email='kamil.choudhury@anserinae.net',
       license='BSD',
       packages=find_packages(),
+      package_data={'frieze' : ['capability/resources/*/*']},
       install_requires=[
         'mako',
         'openarc',
