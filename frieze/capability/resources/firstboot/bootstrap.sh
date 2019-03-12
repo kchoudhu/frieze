@@ -1,5 +1,5 @@
 #!/bin/sh -e
-
+</%text>
 RCCONF=/etc/rc.conf
 URCDIR=/usr/local/etc/rc.d/
 FIRSTBOOT_SENTINEL=/firstboot
@@ -33,3 +33,4 @@ touch ${FIRSTBOOT_SENTINEL}
 
 bectl create bootstrap-done
 bectl activate bootstrap-done
+</%text>\

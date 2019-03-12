@@ -1,3 +1,5 @@
+>/usr/local/sbin/configinit 555
+<%text>
 #!/bin/sh -e
 
 # Check parameters.
@@ -59,3 +61,4 @@ find ${D} -type f |
     while read F; do
         sh $0 ${F}
 done
+</%text>

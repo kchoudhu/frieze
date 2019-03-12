@@ -1,3 +1,5 @@
+>/usr/local/etc/rc.d/frieze_configinit 555
+<%text>
 #!/bin/sh
 
 # KEYWORD: firstboot
@@ -45,3 +47,4 @@ frieze_configinit_run()
 
 load_rc_config $name
 run_rc_command "$1"
+</%text>\

@@ -38,8 +38,9 @@ from openarc.exception import OAGraphRetrieveError, OAError
 from frieze.auth import CertAuth, CertFormat
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
 from frieze.capability import\
-    ConfigGenFreeBSD, ConfigGenLinux, CapabilityTemplate,\
-    dhclient as dhc, bird, dhcpd, gateway, jail, named, pf, pflog, resolvconf
+    ConfigGenFreeBSD, ConfigInit, CapabilityTemplate,\
+    dhclient as dhc, bird, dhcpd, firstboot, gateway, jail,\
+    named, pf, pflog, resolvconf
 
 #### Helper functions
 
@@ -677,11 +678,15 @@ class OAG_Domain(OAG_FriezeRoot):
         if not self.is_frozen:
             raise OAError("Can't deploy domain that hasn't been snapshotted")
 
+        def generate_domain_config():
+            hostcfgs = {}
+            for site in self.site:
+                hostcfgs = {**hostcfgs, **site.configure()}
+            return hostcfgs
+
         # If you aren't pushing, just generate the files and return
         if not push:
-            tar_files = {}
-            for site in self.site:
-                tar_files = {**tar_files, **site.configure()}
+            generate_domain_config()
             return
 
         # Atomically distribute the cert authority to all sites so that
@@ -699,32 +704,34 @@ class OAG_Domain(OAG_FriezeRoot):
         with tempfile.TemporaryDirectory() as td:
 
             # Generate configs
-            tar_files = {}
-            for site in self.site:
-                tar_files = {**tar_files, **site.configure()}
+            hostcfgs = generate_domain_config()
 
             # SSH credential creation
-            user = pwd.getpwuid(os.getuid())[0]
-            command = 'Deploy {%s:%s}' % (self.domain, self.version_name)
-            ssh_dir = os.path.join(td, '.ssh')
-            (id_file, id_file_pub) = self.certauthority.issue_ssh_certificate(user, command, serialize_to_dir=ssh_dir)
+            (id_file, id_file_pub) =\
+                self.certauthority.issue_ssh_certificate(
+                    pwd.getpwuid(os.getuid())[0],                       # user
+                    f'Deploy [{self.domain}:{self.version_name}]',      # command name
+                    serialize_to_dir=os.path.join(td, '.ssh')           # where to serialize
+                )
 
-            # create tarballs
-            for host, host_cfgdir in tar_files.items():
-                host_address      = host.db.search()[-1].ip4(fib=FIB.WORLD)
-                host_tarfile      = f'{host.fqdn}.tar.bz2'
-                host_tarfile_path = os.path.join(td, host_tarfile)
+            # get configinit representation, send to host for execution
+            for host, host_tar in hostcfgs.items():
+                remote_address = host.db.search()[-1].ip4(fib=FIB.WORLD)
+                remote_tarfile = f'{host.fqdn}.tar.bz2'
+                cmd = f'ssh root@{remote_address} -i {id_file} "cat > {remote_tarfile} && configinit {remote_tarfile}"'
 
-                os.chdir(host_cfgdir)
-                with tarfile.open(host_tarfile_path, "w:bz2") as tar:
-                    for file in os.listdir(host_cfgdir):
-                        tar.add(file)
+                print(f'Pushing configuration for: {host.fqdn} ({remote_address}')
+                print(f'  {cmd}')
 
-                with open(host_tarfile_path, 'rb') as f:
-                    print("Pushing configuration for: %s (%s)" % (host.fqdn, host_address))
-                    cmd = f'ssh root@{host.ip4(fib=FIB.WORLD)} -i {id_file} "cat > {host_tarfile} && configinit {host_tarfile}"'
-                    print("  %s" % cmd)
-                    output = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=f.read())
+                output =\
+                    subprocess.run(
+                        cmd,
+                        shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        input=host_tar
+                    )
+
+                # We'll need to log output here
+                print(output)
 
     @property
     def is_frozen(self):
@@ -945,11 +952,10 @@ class OAG_Host(OAG_FriezeRoot):
     def configprovider(self):
         return {
             OSFamily.FreeBSD : ConfigGenFreeBSD,
-            OSFamily.Linux : ConfigGenLinux
         }[self.os.family](self)
 
     def configure(self, targetdir):
-        self.configprovider.generate().emit_output(targetdir)
+        return ConfigInit(self.configprovider.intermediate_representation).generate(targetdir=targetdir)
 
     @property
     def containers(self):
@@ -1238,6 +1244,7 @@ class OAG_Site(OAG_FriezeRoot):
                     print("[%s] tunable not compatible with [%s]" % (sysctl[0], host.os))
 
             # Turn on forwarding and pf by default: EVERY host is a router
+            host.add_capability(firstboot())
             host.add_capability(gateway(), enable_state=True)
             host.add_capability(pf(), enable_state=True)
             host.add_capability(pflog(), enable_state=True)
@@ -1308,7 +1315,7 @@ class OAG_Site(OAG_FriezeRoot):
 
         # Create configurations for each host. The configurations contain a
         # full suite of config files,
-        host_tars = {}
+        hostcfgs = {}
 
         for i, host in enumerate(self.host.db.search()):
 
@@ -1318,14 +1325,10 @@ class OAG_Site(OAG_FriezeRoot):
                 shutil.rmtree(host_cfg_dir)
             except FileNotFoundError:
                 pass
-            os.makedirs(host_cfg_dir)
 
-            # Generate host config, ensuring freshest view
-            host.configure(host_cfg_dir)
+            hostcfgs[OAG_Host(host.id)] = host.configure(host_cfg_dir)
 
-            host_tars[OAG_Host(host.id)] = host_cfg_dir
-
-        return host_tars
+        return hostcfgs
 
     @property
     def containers(self):
@@ -1339,23 +1342,7 @@ class OAG_Site(OAG_FriezeRoot):
         extcloud = ExtCloud(self.provider)
 
         # Create your server configinit tarball
-        #
-        # Each configinit command goes in its own archive member ("tarinfo"),
-        # which is then added to the archive ("tarout"), which is then converted
-        # to base64 for decoding by openssl on the server.
-        tarout = io.BytesIO()
-        cfi_raw = pkg.resource_string('frieze.resources.firstboot', 'configinit.payload').decode()
-        cfi_items = ['#!\n'+i[2:] for i in cfi_raw.split('\n') if len(i)>0]
-        with tarfile.open(fileobj=tarout, mode="w") as tar:
-            for i, cfi in enumerate(cfi_items):
-                tarinfo = tarfile.TarInfo(name='{:0>4}.cfg'.format(i))
-
-                payload = io.BytesIO()
-                tarinfo.size = payload.write(cfi.encode())
-                payload.seek(0)
-
-                tar.addfile(tarinfo=tarinfo, fileobj=payload)
-            cfi_push = tarout.getvalue().decode()
+        cfi_push = firstboot().generate_bootstrap_tarball()
         extcloud.metadata_set_user_data(cfi_push)
 
         # Collect block storage

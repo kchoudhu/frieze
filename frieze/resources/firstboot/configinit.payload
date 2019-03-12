@@ -1,5 +1,0 @@
-#!sysrc -f /etc/rc.conf firstboot_pkgs_list="bash nano ca_root_nss openssh-portable"
-#!sysrc -f /etc/rc.conf sshd_enable="NO"
-#!sysrc -f /etc/rc.conf.local openssh_enable="YES"
-#!mkdir -p /usr/local/etc/ssh
-#!printf 'TrustedUserCAKeys /usr/local/etc/ssh/ca.pub\nPasswordAuthentication no\nChallengeResponseAuthentication no\nPermitRootLogin prohibit-password\n' > /usr/local/etc/ssh/sshd_config

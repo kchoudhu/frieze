@@ -3,6 +3,7 @@ __all__ = [
     'bird',
     'dhclient',
     'dhcpd',
+    'firstboot',
     'gateway',
     'jail',
     'linux',
@@ -15,6 +16,8 @@ __all__ = [
 ]
 
 import frieze
+import io
+import tarfile
 
 import mako.template
 import pkg_resources as pkg
@@ -119,6 +122,39 @@ class dhcpd(CapabilityTemplate):
 
 class dhclient(CapabilityTemplate):
     jailable = False
+
+class firstboot(CapabilityTemplate):
+
+    def generate_cfg_files(self, host, bootstrap=False):
+
+        if bootstrap:
+            exclude = []
+        else:
+            exclude = [
+                'bootstrap.sh',
+                'configinit.payload',
+                'resetimage.sh',
+            ]
+
+        return super().generate_cfg_files(host, __exclude__=exclude)
+
+    def generate_bootstrap_tarball(self):
+        """Generate tarball of commands to be executed by frieze_configinit, which
+        executes this payload on first boot"""
+        rv = {
+            frieze.capability.ConfigFile.PRE_COMMAND_LIST : [
+                'sysrc -f /etc/rc.conf firstboot_pkgs_list="bash nano ca_root_nss openssh-portable"',
+                'sysrc -f /etc/rc.conf sshd_enable="NO"',
+                'sysrc -f /etc/rc.conf.local openssh_enable="YES"',
+                'mkdir -p /usr/local/etc/ssh',
+                'printf "TrustedUserCAKeys /usr/local/etc/ssh/ca.pub\nPasswordAuthentication no\nChallengeResponseAuthentication no\nPermitRootLogin prohibit-password\n" > /usr/local/etc/ssh/sshd_config'
+            ]
+        }
+
+        return\
+            frieze.capability.ConfigInit(rv)\
+            .generate()\
+            .decode()
 
 class gateway(CapabilityTemplate): pass
 

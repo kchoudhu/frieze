@@ -1,5 +1,5 @@
 #!/bin/sh -e
-
+<%text>
 RCCONF=/etc/rc.conf
 URCDIR=/usr/local/etc/rc.d/
 FIRSTBOOT_SENTINEL=/firstboot
@@ -26,3 +26,4 @@ rm ${FIRSTBOOT_SENTINEL}
 
 bectl activate default
 bectl destroy -F bootstrap-done
+</%text>\
