@@ -1,5 +1,8 @@
 __all__ = [
+    # Utilities
     'CapabilityTemplate',
+    'add',
+    # Base services
     'bird',
     'dhclient',
     'dhcpd',
@@ -16,7 +19,10 @@ __all__ = [
 ]
 
 import frieze
+import importlib
 import io
+import os
+import sys
 import tarfile
 
 import mako.template
@@ -52,6 +58,9 @@ class CapabilityTemplate(object):
     # not in this list cannot be set on the capability
     knobs = []
 
+    # Resource directory (for internal bookkeeping)
+    resource_path = 'frieze.capability.resources'
+
     def __init__(self):
         self.set_knobs = {}
         self.cmd_count = 0
@@ -67,9 +76,9 @@ class CapabilityTemplate(object):
         __exclude__.append('__pycache__')
         try:
             cmd_cnt = 0
-            cap_cfgs = pkg.resource_listdir('frieze.capability.resources', self.name)
+            cap_cfgs = pkg.resource_listdir(self.resource_path, self.name)
             for cfg in [cfg for cfg in cap_cfgs if cfg not in __exclude__]:
-                cfg_raw = pkg.resource_string('frieze.capability.resources.%s' % self.name, cfg).decode()
+                cfg_raw = pkg.resource_string(f'{self.resource_path}.{self.name}', cfg).decode()
                 cfg_taste = cfg_raw.split('\n')[0]
                 if cfg_taste[0:2]=='#!':
                     cfg_name = self.next_cmd_cfg_name()
@@ -106,6 +115,26 @@ class CapabilityTemplate(object):
         return {
             OSFamily.FreeBSD: "setfib %s service %s restart %s" % (fib.value, self.name, extra_prms)
         }[os.family]
+
+def add(searchdir):
+    """Add user-defined capabilities in searchdir. Pop up one directory and
+    use import_modules"""
+    capmod = importlib.import_module('frieze.capability')
+
+    canonical_path = os.path.expanduser(searchdir)
+    module_path = os.path.dirname(canonical_path)
+    module_name = os.path.basename(canonical_path)
+    sys.path.append(module_path)
+
+    # Push module information into frieze.capability, and fix resource_path
+    module = importlib.import_module(module_name)
+    for m in dir(module):
+        elem = getattr(module, m)
+        if type(elem)==type and isinstance(elem(), CapabilityTemplate):
+            setattr(capmod, elem.__name__, elem)
+            setattr(elem, 'resource_path', f'{module_name}.resources')
+
+    importlib.invalidate_caches()
 
 ## Service definitions
 
