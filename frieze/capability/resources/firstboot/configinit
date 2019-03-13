@@ -8,8 +8,12 @@ if [ $# -ne 1 ]; then
         exit 1
 fi
 CONFDATA=$1
+CONFPAYLOAD=`basename ${CONFDATA}`
 LOGFILE=/var/log/configinit
+
 touch ${LOGFILE}
+
+echo "${CONFPAYLOAD}" >>${LOGFILE} 2>&1
 
 # Check that the file exists.
 if ! [ -f ${CONFDATA} ]; then
@@ -20,7 +24,7 @@ fi
 # If the first two bytes are '#!', make it executable and run it.
 if [ "`head -c 2 ${CONFDATA}`" = '#!' ]; then
         chmod +x ${CONFDATA}
-        ${CONFDATA} >> ${LOGFILE}
+        ${CONFDATA} >>${LOGFILE} 2>&1
         exit 0
 fi
 
