@@ -1300,8 +1300,8 @@ class OAG_Site(OAG_FriezeRoot):
         for container in self.containers:
             for cap in container.capability:
                 try:
-                    if cap.cap_required_mount:
-                        for crm in cap.cap_required_mount:
+                    if cap.capability_required_mount:
+                        for crm in cap.capability_required_mount:
                             store_init.append([container.fqdn, crm.clone(), container.host.clone()])
                 except AttributeError:
                     # No caps pointed here yet
