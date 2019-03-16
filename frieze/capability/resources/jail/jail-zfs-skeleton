@@ -6,7 +6,7 @@ THINJAIL_DS=${container.dataset(frieze.Container.DataLayer.THINJAIL)}
 SKELETON_DS=${container.dataset(frieze.Container.DataLayer.SKELETON)}
 <%text>
 if [ ! "`zfs list | egrep ${THINJAIL_DS}`" ]; then
-</%text>
+</%text>\
     zfs clone -p ${container.dataset(frieze.Container.DataLayer.SKELETON)}@skeleton ${container.dataset(frieze.Container.DataLayer.THINJAIL)}
 fi
 mkdir -p ${container.jaildir}/usr/local/sbin/
