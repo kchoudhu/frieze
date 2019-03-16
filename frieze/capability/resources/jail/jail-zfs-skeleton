@@ -1,4 +1,21 @@
 #!/bin/sh -e
 <%import frieze%>\
+# Create directory structure
 mkdir -p ${container.jaildir}
-zfs clone -p ${container.dataset(frieze.Container.DataLayer.SKELETON)}@skeleton ${container.dataset(frieze.Container.DataLayer.THINJAIL)}
+THINJAIL_DS=${container.dataset(frieze.Container.DataLayer.THINJAIL)}
+SKELETON_DS=${container.dataset(frieze.Container.DataLayer.SKELETON)}
+<%text>
+if [ ! "`zfs list | egrep ${THINJAIL_DS}`" ]; then
+</%text>
+    zfs clone -p ${container.dataset(frieze.Container.DataLayer.SKELETON)}@skeleton ${container.dataset(frieze.Container.DataLayer.THINJAIL)}
+fi
+mkdir -p ${container.jaildir}/usr/local/sbin/
+mkdir -p ${container.jaildir}/usr/local/etc/rc.d/
+touch ${container.jaildir}/etc/firstboot
+
+# Copy in files from host
+cp /etc/resolv.conf ${container.jaildir}/etc/resolv.conf
+cp /usr/local/etc/rc.d/frieze_configinit ${container.jaildir}/usr/local/etc/rc.d/
+cp /usr/local/sbin/configinit ${container.jaildir}/usr/local/sbin/configinit
+sysrc -f ${container.jaildir}/etc/rc.conf firstboot_sentinel="/etc/firstboot"
+sysrc -f ${container.jaildir}/etc/rc.conf frieze_configinit_enable="YES"

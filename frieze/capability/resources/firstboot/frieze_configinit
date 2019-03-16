@@ -18,14 +18,28 @@ rcvar=frieze_configinit_enable
 start_cmd="frieze_configinit_run"
 stop_cmd=":"
 
-CONFIGURL="http://169.254.169.254/v1/public-keys"
+fetch_cloud_data()
+{
+	# Fetch from linklocal if on host, from firstboot in root if not
+	CONFFILE=$1
+
+	if [ -e '/skeleton' ]; then
+		CONFIGURL='file:///root/cfinit'
+		fetch -o - ${CONFIGURL} | openssl enc -base64 -d -A > ${CONFFILE} 2>/dev/null
+	else
+		CONFIGURL="http://169.254.169.254/v1/public-keys"
+		fetch -o - ${CONFIGURL} | awk -F ' ' '{print $3}' | openssl enc -base64 -d -A > ${CONFFILE} 2>/dev/null
+	fi
+}
 
 frieze_configinit_run()
 {
+
+	CONFFILE=`mktemp "${TMPDIR:-/tmp}/configinit.XXXXXX"`
+
 	# Download to a temporary location.
 	echo -n "Fetching cloud user-data"
-	CONFFILE=`mktemp "${TMPDIR:-/tmp}/configinit.XXXXXX"`
-	fetch -o - ${CONFIGURL} | awk -F ' ' '{print $3}' | openssl enc -base64 -d -A > ${CONFFILE} 2>/dev/null
+	fetch_cloud_data ${CONFFILE}
 
 	# If we succeeded, process it; otherwise report failure.
 	if [ $? = 0 ]; then

@@ -27,14 +27,14 @@ class ConfigFile(enum.Enum):
     POST_COMMAND_LIST = 'post_cmdlist'
 
 class ConfigGenFreeBSD(object):
-    def __init__(self, host):
-        self.host = host
-        self.cfg  = {}
+    def __init__(self, rununit):
+        self.rununit = rununit
+        self.cfg     = {}
 
     @property
     def intermediate_representation(self):
         """Generate an intermediate representation that is suitable for output"""
-        from .._core import RoutingStyle, NetifType, FIB
+        from .._core import RoutingStyle, NetifType, FIB, Container, Host
         def gen_sysctl_config(dbsysctl):
             (file, knob, value) = {
                 TunableType.BOOT    : ( ConfigFile.BOOT_LOADER,
@@ -73,7 +73,7 @@ class ConfigGenFreeBSD(object):
             else:
                 if capability.start_local:
                     knob  = "%s_%s" % (capability.service, capability.id)
-                    value = service.startcmd(self.host.os, capability.fib, capability.start_local_prms)
+                    value = service.startcmd(self.rununit.os, capability.fib, capability.start_local_prms)
                     rv[ConfigFile.RC_LOCAL][knob] = value
 
             if capability.capability_knob:
@@ -82,7 +82,7 @@ class ConfigGenFreeBSD(object):
                     rv[ConfigFile.RC_CONF][knob] = cck.value
 
             # Generate configurations if present in resources
-            rv = {**rv, **service.generate_cfg_files(self.host)}
+            rv = {**rv, **service.generate_cfg_files(self.rununit)}
 
             return rv
 
@@ -106,48 +106,55 @@ class ConfigGenFreeBSD(object):
                     dct[k] = merge_dct[k]
 
         # Install packages to begin with
-        self.cfg[ConfigFile.PRE_COMMAND_LIST] = []
-        install_pkgs = [c.package for c in self.host.capability if c.package]
-        self.cfg[ConfigFile.PRE_COMMAND_LIST].append('yes | pkg install '+ ' '.join(install_pkgs))
 
-        # What about those tunables!
-        for tunable in self.host.sysctl:
-            dict_merge(self.cfg, gen_sysctl_config(tunable))
-
-        # Merge in capability information
-        for capability in self.host.capability:
-            dict_merge(self.cfg, gen_capability_config(capability))
+        install_pkgs = [c.package for c in self.rununit.capability if c.package]
+        if install_pkgs:
+            self.cfg[ConfigFile.PRE_COMMAND_LIST] = []
+            self.cfg[ConfigFile.PRE_COMMAND_LIST].append('yes | pkg install '+ ' '.join(install_pkgs))
 
         # Set a hostname
-        dict_merge(self.cfg, gen_property_config(HostProperty.hostname, value=self.host.fqdn))
+        dict_merge(self.cfg, gen_property_config(HostProperty.hostname, value=self.rununit.fqdn))
 
-        # Networking
-        cloned_ifaces=[]
-        for iface in self.host.net_iface:
-            if iface.routingstyle==RoutingStyle.DHCP:
-                value = 'DHCP'
-            elif iface.routingstyle==RoutingStyle.STATIC:
-                value = 'inet %s netmask %s' % (iface.ip4, iface.netmask)
-                if iface.type==NetifType.VLAN:
-                    value += ' vlan %d vlandev %s' % (iface.deployment.vlanid, iface.vlanhost.name)
-                    cloned_ifaces.append(iface.name)
-            dict_merge(self.cfg, gen_property_config(HostProperty.ifconfig, iface.name, value=value))
-        if cloned_ifaces:
-            dict_merge(self.cfg, gen_property_config(HostProperty.cloned_interfaces, value=' '.join(cloned_ifaces)))
+        # Merge in capability information
+        for capability in self.rununit.capability:
+            dict_merge(self.cfg, gen_capability_config(capability))
 
-        # Flatten rc.local into an array of commands to be executed
+        if type(self.rununit)==Host:
+
+            # Tunables
+            for tunable in self.rununit.sysctl:
+                dict_merge(self.cfg, gen_sysctl_config(tunable))
+
+            # Networking
+            cloned_ifaces=[]
+            for iface in self.rununit.net_iface:
+                if iface.routingstyle==RoutingStyle.DHCP:
+                    value = 'DHCP'
+                elif iface.routingstyle==RoutingStyle.STATIC:
+                    value = 'inet %s netmask %s' % (iface.ip4, iface.netmask)
+                    if iface.type==NetifType.VLAN:
+                        value += ' vlan %d vlandev %s' % (iface.deployment.vlanid, iface.vlanhost.name)
+                        cloned_ifaces.append(iface.name)
+                dict_merge(self.cfg, gen_property_config(HostProperty.ifconfig, iface.name, value=value))
+            if cloned_ifaces:
+                dict_merge(self.cfg, gen_property_config(HostProperty.cloned_interfaces, value=' '.join(cloned_ifaces)))
+
+            # Finishing commands
+            be_name = self.rununit.domain.version_name.lower().replace(' ', '_')
+            self.cfg[ConfigFile.POST_COMMAND_LIST] = [
+                f'bectl create {be_name}',
+                f'bectl activate {be_name}',
+                f'shutdown -r now'
+            ]
+        elif type(self.rununit)==Container:
+            pass
+
+        # Post processing: flatten rc.local into an array of commands to be executed
         try:
             self.cfg[ConfigFile.RC_LOCAL] = [v for k, v in self.cfg[ConfigFile.RC_LOCAL].items()]
         except KeyError:
             pass
 
-        # Add post processing
-        be_name = self.host.domain.version_name.lower().replace(' ', '_')
-        self.cfg[ConfigFile.POST_COMMAND_LIST] = [
-            f'bectl create {be_name}',
-            f'bectl activate {be_name}',
-            f'shutdown -r now'
-        ]
 
         return self.cfg
 

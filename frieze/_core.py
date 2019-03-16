@@ -307,6 +307,15 @@ class OAG_Container(OAG_FriezeRoot):
     def block_storage(self):
         return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
 
+    @property
+    def configprovider(self):
+        return {
+            OSFamily.FreeBSD : ConfigGenFreeBSD,
+        }[self.host.os.family](self)
+
+    def configure(self, targetdir=None):
+        return ConfigInit(self.configprovider.intermediate_representation).generate(targetdir=targetdir)
+
     def dataset(self, layer, mountpoint=False):
         dsname = {
             Container.DataLayer.RELEASE : f'release/{self.os.release_name}',

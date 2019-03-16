@@ -191,16 +191,22 @@ class jail(CapabilityTemplate):
 
     def generate_cfg_files(self, host):
         """Generate regular files, and then add in fstabs for individual jails """
-        rv = super().generate_cfg_files(host, __exclude__=['jail-fstab', 'jail-zfs-skeleton'])
+        rv = super().generate_cfg_files(host, __exclude__=['jail-fstab', 'jail-zfs-skeleton', 'jail-configinit'])
 
         pkg_name = 'frieze.capability.resources.%s' % self.name
-        jail_zfs_template   = pkg.resource_string(pkg_name, 'jail-zfs-skeleton').decode()
-        jail_fstab_template = pkg.resource_string(pkg_name, 'jail-fstab').decode()
+        jail_zfs_template    = pkg.resource_string(pkg_name, 'jail-zfs-skeleton').decode()
+        jail_fstab_template  = pkg.resource_string(pkg_name, 'jail-fstab').decode()
+        jail_cfinit_template = pkg.resource_string(pkg_name, 'jail-configinit').decode()
 
         for container in host.containers:
-            filename = f'/usr/local/jails/{container.sysname}.fstab'
+            print(container.fqdn)
+            fstab_file = f'/usr/local/jails/{container.sysname}.fstab'
             rv[self.next_cmd_cfg_name()] = mako.template.Template(jail_zfs_template).render(container=container, host=host)
-            rv[filename] = mako.template.Template(jail_fstab_template).render(container=container, host=host)
+            rv[fstab_file] = mako.template.Template(jail_fstab_template).render(container=container, host=host)
+
+            # Create config payload
+            cfinit_file = f'{container.jaildir}/root/cfinit'
+            rv[cfinit_file] = mako.template.Template(jail_cfinit_template).render(container=container, host=host)
 
         return rv
 
