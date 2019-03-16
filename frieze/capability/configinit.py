@@ -110,7 +110,7 @@ class ConfigGenFreeBSD(object):
         install_pkgs = [c.package for c in self.rununit.capability if c.package]
         if install_pkgs:
             self.cfg[ConfigFile.PRE_COMMAND_LIST] = []
-            self.cfg[ConfigFile.PRE_COMMAND_LIST].append('yes | pkg install '+ ' '.join(install_pkgs))
+            self.cfg[ConfigFile.PRE_COMMAND_LIST].append('export ASSUME_ALWAYS_YES=yes && yes | pkg install '+ ' '.join(install_pkgs))
 
         # Set a hostname
         dict_merge(self.cfg, gen_property_config(HostProperty.hostname, value=self.rununit.fqdn))
