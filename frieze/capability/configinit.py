@@ -106,7 +106,6 @@ class ConfigGenFreeBSD(object):
                     dct[k] = merge_dct[k]
 
         # Install packages to begin with
-
         install_pkgs = [c.package for c in self.rununit.capability if c.package]
         if install_pkgs:
             self.cfg[ConfigFile.PRE_COMMAND_LIST] = []
