@@ -210,7 +210,12 @@ class OAG_Capability(OAG_FriezeRoot):
         'start_local_prms':
                        [ 'text',         None,  None ],
         'fib'        : [ FIB,            True,  None ],
+        'expose'     : [ 'bool',         True,  None ],
     }
+
+    @property
+    def c_capability(self):
+        return getattr(frieze.capability, self.service, None)
 
     def rc_delete(self):
         self.start_rc = None
@@ -235,9 +240,8 @@ class OAG_Capability(OAG_FriezeRoot):
     @property
     def package(self):
         # In base?
-        c_capability = getattr(frieze.capability, self.service, None)
-        if c_capability:
-            return c_capability.package
+        if self.c_capability:
+            return self.c_capability.package
         else:
             return None
 
@@ -378,7 +382,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, expose=False):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If capdef doesn't specify cores or memory required, just go ahead
@@ -413,6 +417,7 @@ class OAG_Deployment(OAG_FriezeRoot):
                             # OK to set FIB.DEFAULT: containerized capabilities
                             # are always on the default (internal) routing table
                             'fib' : FIB.DEFAULT,
+                            'expose' : expose
                         })
 
                     for (mount, size_gb) in capdef.mounts:
@@ -784,7 +789,7 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT):
+    def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT, expose=False):
         """Run a capability on a host. Enable it."""
         if isinstance(capdef, CapabilityTemplate):
             create = True
@@ -808,6 +813,7 @@ class OAG_Host(OAG_FriezeRoot):
                             'start_rc' : enable_state,
                             'start_local' : False,
                             'fib' : fib,
+                            'expose' : expose
                         })
 
                     if capdef.setknobs_exist:
@@ -917,6 +923,7 @@ class OAG_Host(OAG_FriezeRoot):
                         'start_local' : True,
                         'start_local_prms' : dhcp_ifaces[i].name,
                         'fib' : self.fibs[i],
+                        'expose' : False,
                     })
 
             # 4. Enable dhcpd on bastion (if it exists) -every- time because each newly added interface
