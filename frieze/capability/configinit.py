@@ -103,7 +103,10 @@ class ConfigGenFreeBSD(object):
                         and isinstance(merge_dct[k], collections.Mapping)):
                     dict_merge(dct[k], merge_dct[k])
                 else:
-                    dct[k] = merge_dct[k]
+                    if type(merge_dct[k])==list:
+                        dct[k] += merge_dct[k]
+                    else:
+                        dct[k] = merge_dct[k]
 
         # Install packages to begin with
         install_pkgs = [c.package for c in self.rununit.capability if c.package]
