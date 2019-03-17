@@ -40,7 +40,7 @@ from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
 from frieze.capability import\
     ConfigGenFreeBSD, ConfigInit, CapabilityTemplate,\
     dhclient as dhc, bird, dhcpd, firstboot, gateway, jail,\
-    named, pf, pflog, resolvconf
+    named, pf, pflog, resolvconf, zfs
 
 #### Helper functions
 
@@ -305,7 +305,7 @@ class OAG_Container(OAG_FriezeRoot):
 
     @property
     def block_storage(self):
-        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.host.fqdn==self.fqdn)
+        return OAG_SysMount() if self.site.block_storage.size==0 else self.site.block_storage.clone().rdf.filter(lambda x: x.container_name==self.fqdn)
 
     @property
     def configprovider(self):
@@ -1020,6 +1020,11 @@ class OAG_Host(OAG_FriezeRoot):
         return '%s.in-addr.arpa' % '.'.join(reversed(self.ip4().split('.')[:3]))
 
     @property
+    def rootdisk(self):
+        from ._provider import ExtCloud
+        return ExtCloud(self.site.provider).block_rootdisk()
+
+    @property
     def routed_subnets(self):
         return self.subnet.clone()
 
@@ -1257,6 +1262,7 @@ class OAG_Site(OAG_FriezeRoot):
             host.add_capability(gateway(), enable_state=True)
             host.add_capability(pf(), enable_state=True)
             host.add_capability(pflog(), enable_state=True)
+            host.add_capability(zfs(), enable_state=True)
             if host.role==HostRole.COMPUTE:
                 host.add_capability(jail(), enable_state=True)
 
@@ -1345,9 +1351,8 @@ class OAG_Site(OAG_FriezeRoot):
 
     def prepare_infrastructure(self):
 
-        from ._provider import ExtCloud
-
         # Prep the external provider
+        from ._provider import ExtCloud
         extcloud = ExtCloud(self.provider)
 
         # Create your server configinit tarball
@@ -1543,23 +1548,30 @@ class OAG_SysMount(OAG_FriezeRoot):
 
     @property
     def blockstore_name(self):
-        return "%s:%s:%s" % (self.host.site.shortname, self.container_name, self.capmnt.mount)
+        """Device name on the cloud provider"""
+        return f'{self.host.site.shortname}:{self.container_name}:{self.capmnt.mount}'
+
+    @property
+    def sysname(self):
+        """Device name seen by OS when attached"""
+        (disk_type, disk_root_idx) = self.host.rootdisk
+        return f'/dev/{disk_type}{disk_root_idx+self._iteridx}'
 
     @property
     def dataset(self):
-        return "%s/%s" % (self.zpool, self.capmnt.mount)
+        return f'{self.zpool}'
 
     @property
     def default_mountdir(self):
         return '/mnt'
 
     @property
-    def mount_pount(self):
-        return "%s/%s" % (self.default_mountdir, self.dataset)
+    def mount_point(self):
+        return f'{self.default_mountdir}/{self.dataset}'
 
     @property
     def zpool(self):
-        return "%s%d" % (self.capmnt.cap.service, self.capmnt.cap.stripe)
+        return f'{self.capmnt.cap.service}{self.capmnt.cap.stripe}_{self.capmnt.mount}'
 
 class HostTemplate(object):
     def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[], caps=[]):

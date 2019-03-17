@@ -33,6 +33,9 @@ class CloudInterface(object):
     def block_list(self, show_delete=False):
         raise NotImplementedError("Implement in deriving Shim")
 
+    def block_rootdisk(self):
+        raise NotImplementedError("Implement in deriving Shim")
+
     def network_attach(self, host, network):
         raise NotImplementedError("Implement in deriving Shim")
 
@@ -184,6 +187,9 @@ class VultrShim(CloudInterface):
         } for ret in self.api.block.list()]
         filtered = rets if show_delete else [ret for ret in rets if ret['label'][:6]!='delete']
         return sorted(filtered, key=lambda x: x['crdatetime'], reverse=True)
+
+    def block_rootdisk(self):
+        return ('vtbd', 0)
 
     def metadata_set_user_data(self, userdata):
         """Vultr sucks and doesn't have a userdata field so we smuggle the

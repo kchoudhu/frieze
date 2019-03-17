@@ -9,13 +9,18 @@ if [ ! "`zfs list | egrep ${THINJAIL_DS}`" ]; then
 </%text>\
     zfs clone -p ${container.dataset(frieze.Container.DataLayer.SKELETON)}@skeleton ${container.dataset(frieze.Container.DataLayer.THINJAIL)}
 fi
-mkdir -p ${container.jaildir}/usr/local/sbin/
-mkdir -p ${container.jaildir}/usr/local/etc/rc.d/
-touch ${container.jaildir}/etc/firstboot
+mkdir -p ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/usr/local/sbin/
+mkdir -p ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/usr/local/etc/rc.d/
+touch ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/etc/firstboot
 
 # Copy in files from host
-cp /etc/resolv.conf ${container.jaildir}/etc/resolv.conf
-cp /usr/local/etc/rc.d/frieze_configinit ${container.jaildir}/usr/local/etc/rc.d/
-cp /usr/local/sbin/configinit ${container.jaildir}/usr/local/sbin/configinit
-sysrc -f ${container.jaildir}/etc/rc.conf firstboot_sentinel="/etc/firstboot"
-sysrc -f ${container.jaildir}/etc/rc.conf frieze_configinit_enable="YES"
+cp /etc/resolv.conf ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/etc/resolv.conf
+cp /usr/local/etc/rc.d/frieze_configinit ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/usr/local/etc/rc.d/
+cp /usr/local/sbin/configinit ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/usr/local/sbin/configinit
+sysrc -f ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/etc/rc.conf firstboot_sentinel="/etc/firstboot"
+sysrc -f ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/etc/rc.conf frieze_configinit_enable="YES"
+% if container.block_storage:
+% for bs in container.block_storage:
+mkdir -p ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)}/${bs.mount_point}
+% endfor
+% endif

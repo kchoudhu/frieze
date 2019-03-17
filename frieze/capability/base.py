@@ -16,6 +16,7 @@ __all__ = [
     'pflog',
     'resolvconf',
     'sshd',
+    'zfs'
 ]
 
 import frieze
@@ -199,7 +200,6 @@ class jail(CapabilityTemplate):
         jail_cfinit_template = pkg.resource_string(pkg_name, 'jail-configinit').decode()
 
         for container in host.containers:
-            print(container.fqdn)
             fstab_file = f'/usr/local/jails/{container.sysname}.fstab'
             rv[self.next_cmd_cfg_name()] = mako.template.Template(jail_zfs_template).render(container=container, host=host)
             rv[fstab_file] = mako.template.Template(jail_fstab_template).render(container=container, host=host)
@@ -282,3 +282,23 @@ class openssh(CapabilityTemplate):
 class resolvconf(CapabilityTemplate): pass
 
 class sshd(CapabilityTemplate): pass
+
+class zfs(CapabilityTemplate):
+
+    def generate_cfg_files(self, host):
+
+        rv = super().generate_cfg_files(host, __exclude__=['zpool-init'])
+
+        pkg_name = 'frieze.capability.resources.%s' % self.name
+        zpool_template = pkg.resource_string(pkg_name, 'zpool-init').decode()
+
+        for bs in host.block_storage:
+            try:
+                rv[frieze.capability.ConfigFile.PRE_COMMAND_LIST]
+            except KeyError:
+                rv[frieze.capability.ConfigFile.PRE_COMMAND_LIST] = []
+            rv[frieze.capability.ConfigFile.PRE_COMMAND_LIST].append(
+                mako.template.Template(zpool_template).render(blockstore=bs, host=host)
+            )
+
+        return rv

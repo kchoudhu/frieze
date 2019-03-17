@@ -1,0 +1,6 @@
+zpool import -a
+
+if [ ! "`zpool list | egrep ${blockstore.zpool}`" ]; then
+    zpool create ${blockstore.zpool} ${blockstore.sysname}
+    zfs set mountpoint=${blockstore.mount_point} ${blockstore.dataset}
+fi

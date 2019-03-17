@@ -156,6 +156,7 @@ create_layer_3_skeleton(){
         mv ${BASE_MP}/tmp       ${SKELETON_MP}/tmp
         mv ${BASE_MP}/var       ${SKELETON_MP}/var
         mv ${BASE_MP}/root      ${SKELETON_MP}/root
+        mv ${BASE_MP}/mnt       ${SKELETON_MP}/mnt
 
         echo "  Setting up links to skeleton files"
         mkdir skeleton
@@ -165,6 +166,7 @@ create_layer_3_skeleton(){
         ln -s ../skeleton/usr/local usr/local
         ln -s skeleton/tmp tmp
         ln -s skeleton/var var
+        ln -s skeleton/mnt mnt
 
         echo "  Creating skeleton template snapshot"
         zfs snapshot ${SKELETON_SNAP}
