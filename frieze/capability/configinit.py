@@ -133,10 +133,12 @@ class ConfigGenFreeBSD(object):
                 if iface.routingstyle==RoutingStyle.DHCP:
                     value = 'DHCP'
                 elif iface.routingstyle==RoutingStyle.STATIC:
-                    value = 'inet %s netmask %s' % (iface.ip4, iface.netmask)
+                    value = f'inet {iface.ip4} netmask {iface.netmask}'
                     if iface.type==NetifType.VLAN:
-                        value += ' vlan %d vlandev %s' % (iface.deployment.vlanid, iface.vlanhost.name)
+                        value += f' vlan {iface.deployment.vlanid} vlandev {iface.vlanhost.name}'
                         cloned_ifaces.append(iface.name)
+                    if iface.mtu:
+                        value += f' mtu {iface.mtu}'
                 dict_merge(self.cfg, gen_property_config(HostProperty.ifconfig, iface.name, value=value))
             if cloned_ifaces:
                 dict_merge(self.cfg, gen_property_config(HostProperty.cloned_interfaces, value=' '.join(cloned_ifaces)))

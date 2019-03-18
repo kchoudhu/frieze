@@ -1150,6 +1150,13 @@ class OAG_NetIface(OAG_FriezeRoot):
         return self.gateway is None
 
     @property
+    def mtu(self):
+        """Return None if interface autonegotiates, otherwise value returned by
+        cloud provider"""
+        from ._provider import ExtCloud
+        return ExtCloud(self.host.site.provider).network_iface_mtu(external=self.is_external)
+
+    @property
     def netmask(self):
 
         rv = None

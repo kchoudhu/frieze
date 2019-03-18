@@ -42,6 +42,9 @@ class CloudInterface(object):
     def network_create(self, site, label=None):
         raise NotImplementedError("Implement in deriving Shim")
 
+    def network_iface_mtu(self, external=True):
+        raise NotImplementedError("Implement in deriving Shim")
+
     def network_list(self, show_delete=False):
         raise NotImplementedError("Implement in deriving Shim")
 
@@ -221,6 +224,9 @@ class VultrShim(CloudInterface):
         location = self.bin_location(site.location)
 
         self.api.network.create(location, description=site.shortname)
+
+    def network_iface_mtu(self, external=True):
+        return None if external else 1450
 
     def network_list(self, show_delete=False):
         api_ret = self.api.network.list()
