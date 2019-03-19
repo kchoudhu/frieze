@@ -140,7 +140,7 @@ class VultrShim(CloudInterface):
         return ret.value
 
     def __init__(self, apikey):
-        self.api = vultr.Vultr(apikey if apikey else getenv().extcreds['vultr']['apikey'])
+        self.api = vultr.Vultr(apikey if apikey else getenv('frieze').extcreds['vultr']['apikey'])
 
     def block_attach(self, blockstore):
         v_blockstores = self.block_list()

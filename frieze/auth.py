@@ -169,9 +169,9 @@ class CertAuth(object):
     @property
     def is_intermediate_ca(self):
         try:
-            setattr(self, '_rootca_private_key_file', os.path.expanduser(openarc.env.getenv().rootca['private_key']))
-            setattr(self, '_rootca_certificate_file', os.path.expanduser(openarc.env.getenv().rootca['certificate']))
-            setattr(self, '_rootca_password', openarc.env.getenv().rootca['password'].encode())
+            setattr(self, '_rootca_private_key_file', os.path.expanduser(openarc.env.getenv('frieze').rootca.private_key))
+            setattr(self, '_rootca_certificate_file', os.path.expanduser(openarc.env.getenv('frieze').rootca.certificate))
+            setattr(self, '_rootca_password', openarc.env.getenv('frieze').rootca.password.encode())
         except KeyError:
             setattr(self, '_rootca_private_key_file', str())
             setattr(self, '_rootca_certificate_file', str())
@@ -205,7 +205,7 @@ class CertAuth(object):
             )
 
         ### Set up bless call
-        config = BlessConfig(os.path.join(openarc.env.getenv().runprops['home'], 'cfg', 'bless.cfg'))
+        config = BlessConfig(os.path.join(openarc.env.getenv('frieze').runprops.home, 'cfg', 'bless.cfg'))
         schema = BlessSchema(strict=True)
         schema.context[USERNAME_VALIDATION_OPTION] =\
             config.get(BLESS_OPTIONS_SECTION, USERNAME_VALIDATION_OPTION)
@@ -319,7 +319,7 @@ class CertAuth(object):
 
     @property
     def root(self):
-        return os.path.join(openarc.env.getenv().runprops['home'], 'domains', self.domain.domain, 'ca')
+        return os.path.join(openarc.env.getenv('frieze').runprops.home, 'domains', self.domain.domain, 'ca')
 
     @property
     def rootca_cert(self):
