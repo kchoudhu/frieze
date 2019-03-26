@@ -79,13 +79,21 @@ class CapabilityTemplate(object):
             cmd_cnt = 0
             cap_cfgs = pkg.resource_listdir(self.resource_path, self.name)
             for cfg in [cfg for cfg in cap_cfgs if cfg not in __exclude__]:
-                cfg_raw = pkg.resource_string(f'{self.resource_path}.{self.name}', cfg).decode()
-                cfg_taste = cfg_raw.split('\n')[0]
-                if cfg_taste[0:2]=='#!':
+                cfg_raw = pkg.resource_string(f'{self.resource_path}.{self.name}', cfg)
+                if cfg_raw[0:2]=='#!':
                     cfg_name = self.next_cmd_cfg_name()
                 else:
-                    cfg_name = cfg_taste[2:].strip().split()[0]
-                rv[cfg_name] = mako.template.Template(cfg_raw).render(host=host)
+                    cfg_1l = bytearray()
+                    for b in cfg_raw:
+                        if b=='\n'.encode()[0]:
+                            break
+                        cfg_1l.append(b)
+                    cfg_name = bytes(cfg_1l[2:]).decode().split(' ')[0]
+
+                try:
+                    rv[cfg_name] = mako.template.Template(cfg_raw.decode()).render(host=host)
+                except UnicodeDecodeError:
+                    rv[cfg_name] = cfg_raw
         except FileNotFoundError:
             pass
         return rv
@@ -120,20 +128,19 @@ class CapabilityTemplate(object):
 def add(searchdir):
     """Add user-defined capabilities in searchdir. Pop up one directory and
     use import_modules"""
-    capmod = importlib.import_module('frieze.capability')
-
     canonical_path = os.path.expanduser(searchdir)
-    module_path = os.path.dirname(canonical_path)
-    module_name = os.path.basename(canonical_path)
-    sys.path.append(module_path)
+    sys.path.append(canonical_path)
 
-    # Push module information into frieze.capability, and fix resource_path
-    module = importlib.import_module(module_name)
-    for m in dir(module):
-        elem = getattr(module, m)
-        if type(elem)==type and isinstance(elem(), CapabilityTemplate):
-            setattr(capmod, elem.__name__, elem)
-            setattr(elem, 'resource_path', f'{module_name}.resources')
+    capmod = importlib.import_module('frieze.capability')
+    modules = os.listdir(canonical_path)
+    for module_name in modules:
+        # Push module information into frieze.capability, and fix resource_path
+        module = importlib.import_module(module_name)
+        for m in dir(module):
+            elem = getattr(module, m)
+            if type(elem)==type and isinstance(elem(), CapabilityTemplate):
+                setattr(capmod, elem.__name__, elem)
+                setattr(elem, 'resource_path', f'{module_name}.resources')
 
     importlib.invalidate_caches()
 

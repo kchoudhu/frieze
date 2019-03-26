@@ -211,6 +211,7 @@ class OAG_Capability(OAG_FriezeRoot):
                        [ 'text',         None,  None ],
         'fib'        : [ FIB,            True,  None ],
         'expose'     : [ 'bool',         True,  None ],
+        'custom_pkg' : [ 'bool',         False, None ],
     }
 
     @property
@@ -382,7 +383,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, expose=False):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, expose=False, custom_pkg=False):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If capdef doesn't specify cores or memory required, just go ahead
@@ -417,7 +418,8 @@ class OAG_Deployment(OAG_FriezeRoot):
                             # OK to set FIB.DEFAULT: containerized capabilities
                             # are always on the default (internal) routing table
                             'fib' : FIB.DEFAULT,
-                            'expose' : expose
+                            'expose' : expose,
+                            'custom_pkg' : custom_pkg,
                         })
 
                     for (mount, size_gb) in capdef.mounts:
@@ -789,7 +791,7 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT, expose=False):
+    def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT, expose=False, custom_pkg=False):
         """Run a capability on a host. Enable it."""
         if isinstance(capdef, CapabilityTemplate):
             create = True
@@ -813,7 +815,8 @@ class OAG_Host(OAG_FriezeRoot):
                             'start_rc' : enable_state,
                             'start_local' : False,
                             'fib' : fib,
-                            'expose' : expose
+                            'expose' : expose,
+                            'custom_pkg' : custom_pkg,
                         })
 
                     if capdef.setknobs_exist:
@@ -924,6 +927,7 @@ class OAG_Host(OAG_FriezeRoot):
                         'start_local_prms' : dhcp_ifaces[i].name,
                         'fib' : self.fibs[i],
                         'expose' : False,
+                        'custom_pkg' : False,
                     })
 
             # 4. Enable dhcpd on bastion (if it exists) -every- time because each newly added interface

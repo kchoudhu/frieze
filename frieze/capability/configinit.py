@@ -84,6 +84,17 @@ class ConfigGenFreeBSD(object):
             # Generate configurations if present in resources
             rv = {**rv, **service.generate_cfg_files(self.rununit)}
 
+            if capability.custom_pkg:
+                install_commands = [
+                    f'yes | pkg delete {service.name}',
+                    f'yes | pkg install /root/{service.name}.txz',
+                    f'rm /root/{service.name}.txz',
+                ]
+                try:
+                    rv[ConfigFile.POST_COMMAND_LIST].extend(install_commands)
+                except KeyError:
+                    rv[ConfigFile.POST_COMMAND_LIST] = install_commands
+
             return rv
 
         def gen_property_config(prop, *qualifiers, value=None):
@@ -104,7 +115,10 @@ class ConfigGenFreeBSD(object):
                     dict_merge(dct[k], merge_dct[k])
                 else:
                     if type(merge_dct[k])==list:
-                        dct[k] += merge_dct[k]
+                        try:
+                            dct[k] += merge_dct[k]
+                        except KeyError:
+                            dct[k] = merge_dct[k]
                     else:
                         dct[k] = merge_dct[k]
 
@@ -211,7 +225,7 @@ class ConfigInit(object):
                 for file, content in omatrix.items():
                     tarinfo = tarfile.TarInfo(name=file)
                     payload = io.BytesIO()
-                    tarinfo.size = payload.write(content.encode())
+                    tarinfo.size = payload.write(content.encode() if type(content)!=bytes else content)
                     payload.seek(0)
                     tar.addfile(tarinfo=tarinfo, fileobj=payload)
 
