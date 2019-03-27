@@ -4,8 +4,10 @@ __all__ = [
     'Domain',
     'Site',
     'Host',
-    'HostTemplate', 'HostRole', 'HostOS', 'Tunable', 'TunableType', 'Provider', 'Location', 'FIB',
-    'Netif', 'NetifType', 'SubnetType',
+    'HostRole', 'HostOS',
+    'Tunable', 'TunableType',
+    'Provider', 'Location',
+    'FIB', 'Netif', 'NetifType', 'SubnetType',
     'Deployment',
     'Container',
     'set_domain'
@@ -610,7 +612,7 @@ class OAG_Domain(OAG_FriezeRoot):
                             # Total number of containers on this host
                             'container_count'  : 0,
                             'oag'              : host.clone()[i],
-                            'slot_factor'      : host.memory * host.cpus
+                            'slot_factor'      : host.memory * host.cores
                         }
             return rmatrix
 
@@ -778,7 +780,7 @@ class OAG_Host(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'site'      : [ OAG_Site, True, None ],
-        'cpus'      : [ 'int',    True, None ],
+        'cores'     : [ 'int',    True, None ],
         'memory'    : [ 'int',    True, None ],
         'bandwidth' : [ 'int',    True, None ],
         'name'      : [ 'text',   True, None ],
@@ -1251,7 +1253,7 @@ class OAG_Site(OAG_FriezeRoot):
             host =\
                 OAG_Host().db.create({
                     'site' : self,
-                    'cpus' : template.cpus,
+                    'cores' : template.cores,
                     'memory' : template.memory,
                     'bandwidth' : template.bandwidth,
                     'name' : name,
@@ -1590,16 +1592,6 @@ class OAG_SysMount(OAG_FriezeRoot):
     @property
     def zpool(self):
         return f'{self.capmnt.cap.service}{self.capmnt.cap.stripe}_{self.capmnt.mount}'
-
-class HostTemplate(object):
-    def __init__(self, cpus=None, memory=None, bandwidth=None, sysctls=None, os=HostOS.FreeBSD_12_0, interfaces=[], caps=[]):
-        self.cpus = cpus
-        self.memory = memory
-        self.bandwidth = bandwidth
-        self.interfaces = interfaces
-        self.os = os
-        self.sysctls = sysctls
-        self.caps = caps
 
 ####### Exportable friendly names go here
 

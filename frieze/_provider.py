@@ -109,22 +109,22 @@ class VultrShim(CloudInterface):
     def bin_host_plan(self, host):
         ret = None
         gb_memory = host.memory/1024
-        if host.cpus == 1:
+        if host.cores == 1:
             ret = self.Plan.VPS_1_1_25 if gb_memory < 2 else self.Plan.VPS_1_2_40
-        elif host.cpus == 2:
+        elif host.cores == 2:
             ret = self.Plan.VPS_2_4_60
-        elif 2 < host.cpus <= 4:
+        elif 2 < host.cores <= 4:
             ret = self.Plan.VPS_4_8_100
-        elif 4 < host.cpus <= 6:
+        elif 4 < host.cores <= 6:
             ret = self.Plan.VPS_6_16_200
-        elif 6 < host.cpus <= 8:
+        elif 6 < host.cores <= 8:
             ret = self.Plan.VPS_8_32_300
-        elif 8 < host.cpus <= 16:
+        elif 8 < host.cores <= 16:
             ret = self.Plan.VPS_16_64_400
-        elif 16 < host.cpus <=24:
+        elif 16 < host.cores <=24:
             ret = self.Plan.VPS_24_96_800
         else:
-            raise Exception("Too many CPUs requested")
+            raise Exception("Too many cores requested")
         return ret.value
 
     def bin_os(self, os, snapshot):
