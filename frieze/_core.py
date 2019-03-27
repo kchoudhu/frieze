@@ -44,98 +44,6 @@ from frieze.capability import\
     dhclient as dhc, bird, dhcpd, firstboot, gateway, jail,\
     named, pf, pflog, resolvconf, zfs
 
-#### Helper functions
-
-def walk_graph_to_domain(check_node):
-    if check_node.__class__ == OAG_Domain:
-        return check_node
-    else:
-        domain_found = None
-        for stream in check_node.streams:
-            if check_node.is_oagnode(stream):
-                payload = getattr(check_node, stream, None)
-                if payload:
-                    domain_found = walk_graph_to_domain(payload)
-                    if domain_found:
-                        return domain_found
-        return doamin_found
-
-def friezetxn(fn):
-
-    # The best thing since sliced bread
-    nested_dict = lambda: collections.defaultdict(nested_dict)
-
-    # A simple cloning script
-    def db_clone_with_changes(src, repl={}):
-
-        if not src:
-            return None
-
-        if clones[src.__class__][src.id]:
-            return clones[src.__class__][src.id]
-
-        # recursively descend the subnode graph to
-        initprms = {}
-        for stream in src.streams:
-            payload = getattr(src, stream, None)
-            if payload\
-                and stream not in repl\
-                and src.is_oagnode(stream):
-                    if clones[payload.__class__][payload.id]:
-                        payload = clones[payload.__class__][payload.id]
-                    else:
-                        print("cloning subnode %s[%d].%s.id -> [%d]" % (src.__class__, src.id, stream, payload.id))
-                        clone = db_clone_with_changes(payload)
-                        clones[payload.__class__][payload.id] = clone
-                        payload = clone
-            initprms[stream] = payload
-
-        initprms = {**initprms, **repl}
-        newoag = src.__class__(initprms=initprms, initschema=False).db.create()
-        clones[src.__class__][src.id] = newoag
-
-        return newoag
-
-    # Use this to stash previously cloned items
-    clones = nested_dict()
-
-    def wrapfn(self, *args, **kwargs):
-
-        if self.root_domain.is_frozen:
-
-            with OADbTransaction("Clone domain") as tran:
-
-                n_domain = db_clone_with_changes(self.root_domain, repl={'version_name' : str()})
-
-                # TODO: this can be inferred recursively from forward keys
-
-                for site in self.root_domain.site:
-                    n_site = db_clone_with_changes(site)
-                    for host in site.host:
-                        n_host = db_clone_with_changes(host)
-
-                        # Clone interfaces recursively
-                        for iface in host.net_iface:
-                            n_iface = db_clone_with_changes(iface)
-
-                        # Clone tunables
-                        for tunable in host.sysctl:
-                            n_tunable = db_clone_with_changes(tunable)
-
-                for depl in self.root_domain.deployment:
-                    n_depl = db_clone_with_changes(depl)
-                    if depl.capability:
-                        for cap in depl.capability:
-                            n_cap = db_clone_with_changes(cap)
-
-                for subnet in self.root_domain.subnet:
-                    n_subnet = db_clone_with_changes(subnet)
-
-        self.root_domain.db.search()
-
-        return fn(self, *args, **kwargs)
-    return wrapfn
-
 #### Some enums
 class FIB(enum.Enum):
     DEFAULT     = 0
@@ -175,13 +83,116 @@ class SubnetType(enum.Enum):
 
 #### Database structures
 
+# The best thing since sliced bread
+nested_dict = lambda: collections.defaultdict(nested_dict)
+
+# Use this to store cloned oags
+p_clone_buffer = None
+
+#### Decorator
+def friezetxn(fn):
+    def wrapfn(self, *args, **kwargs):
+        if self.root_domain.is_frozen:
+            raise OAError("This domain is currently frozen. Consider cloning and re-issuing your request")
+        else:
+            return fn(self, *args, **kwargs)
+    return wrapfn
+
 class OAG_FriezeRoot(OAG_RootNode):
     @staticproperty
     def streamable(self): return False
 
+    def walk_graph_to_domain(self, check_node):
+        if check_node.__class__ == OAG_Domain:
+            return check_node
+        else:
+            domain_found = None
+            for stream in check_node.streams:
+                if check_node.is_oagnode(stream):
+                    payload = getattr(check_node, stream, None)
+                    if payload:
+                        domain_found = self.walk_graph_to_domain(payload)
+                        if domain_found:
+                            return domain_found
+            return domain_found
+
     @oagprop
     def root_domain(self, **kwargs):
-        return walk_graph_to_domain(self)
+        return self.walk_graph_to_domain(self)[-1]
+
+    def db_clone_with_changes(self, src, repl={}):
+
+        global p_clone_buffer
+
+        if p_clone_buffer[src.__class__][src.id]:
+            return p_clone_buffer[src.__class__][src.id]
+
+        # recursively descend the subnode graph to
+        initprms = {}
+        for stream in src.streams:
+            payload = getattr(src, stream, None)
+            if payload\
+                and stream not in repl\
+                and src.is_oagnode(stream):
+                    if p_clone_buffer[payload.__class__][payload.id]:
+                        payload = p_clone_buffer[payload.__class__][payload.id]
+                    else:
+                        print("cloning subnode %s[%d].%s.id -> [%d]" % (src.__class__, src.id, stream, payload.id))
+                        clone = self.db_clone_with_changes(payload)
+                        p_clone_buffer[payload.__class__][payload.id] = clone
+                        payload = clone
+            initprms[stream] = payload
+
+        initprms = {**initprms, **repl}
+        newoag = src.__class__(initprms=initprms, initschema=False).db.create()
+        p_clone_buffer[src.__class__][src.id] = newoag
+
+        return newoag
+
+    def txnclone(self):
+
+        global p_clone_buffer
+        global p_domain
+
+        p_clone_buffer = nested_dict()
+
+        with OADbTransaction("Clone domain") as tran:
+
+            n_domain = self.db_clone_with_changes(self.root_domain, repl={'version_name' : str()})
+
+            # TODO: this can be inferred recursively from forward keys
+
+            for site in self.root_domain.site:
+                n_site = self.db_clone_with_changes(site)
+                for host in site.host:
+                    n_host = self.db_clone_with_changes(host)
+
+                    # Clone interfaces recursively
+                    for iface in host.net_iface:
+                        n_iface = self.db_clone_with_changes(iface)
+
+                    # Clone tunables
+                    for tunable in host.sysctl:
+                        n_tunable = self.db_clone_with_changes(tunable)
+
+                    # Clone bare-metal capabilities
+                    for cap in host.capability:
+                        n_capability = self.db_clone_with_changes(cap)
+
+            for depl in self.root_domain.deployment:
+                n_depl = self.db_clone_with_changes(depl)
+                if depl.capability:
+                    for cap in depl.capability:
+                        n_cap = self.db_clone_with_changes(cap)
+
+            for subnet in self.root_domain.subnet:
+                n_subnet = self.db_clone_with_changes(subnet)
+
+        self.root_domain.db.search()
+
+        p_domain = n_domain
+
+        return p_clone_buffer[self.__class__][self.id]
 
 class OAG_Capability(OAG_FriezeRoot):
     """A capability is the running unit of work which is monitored and logged"""
@@ -466,7 +477,8 @@ class OAG_Domain(OAG_FriezeRoot):
 
     @staticproperty
     def dbindices(cls): return {
-        'domain'          : [ ['domain'], False,  None ],
+        'domain'        : [ ['domain'],                 False,  None ],
+        'version_name'  : [ ['domain', 'version_name'], True,   None ]
     }
 
     @staticproperty
@@ -488,8 +500,10 @@ class OAG_Domain(OAG_FriezeRoot):
     @friezetxn
     def add_deployment(self, name, affinity=None):
         try:
-            depl = OAG_Deployment((self, name), 'by_name')
+            depl = OAG_Deployment((self, name), 'by_name')[-1]
+            print(f"====> Found previously generated entry for deployment [{name}]")
         except OAGraphRetrieveError:
+            print(f"====> Creating new entry for deployment [{name}]")
             try:
                 seqnum = self.deployment.size
             except AttributeError:
@@ -511,8 +525,10 @@ class OAG_Domain(OAG_FriezeRoot):
     @friezetxn
     def add_site(self, sitename, shortname, provider, location):
         try:
-            site = OAG_Site((self, sitename), 'by_name')
+            site = OAG_Site((self, sitename), 'by_name')[-1]
+            print(f"====> Found previously generated entry for site [{sitename}]")
         except OAGraphRetrieveError:
+            print(f"====> Creating new entry for site [{sitename}]")
             site =\
                 OAG_Site().db.create({
                     'domain'    : self,
@@ -759,8 +775,12 @@ class OAG_Domain(OAG_FriezeRoot):
         if self.version_name:
             raise OAError("This version has already been snapshot with [%s]" % self.version_name)
 
-        self.version_name = version_name
-        self.db.update()
+        try:
+            version = OAG_Domain((self.domain, version_name), 'by_version_name')
+            raise OAError(f"Snapshot [{version_name}] already exists")
+        except OAGraphRetrieveError:
+            self.version_name = version_name
+            self.db.update()
 
         return self
 
@@ -1247,9 +1267,10 @@ class OAG_Site(OAG_FriezeRoot):
     @friezetxn
     def add_host(self, template, name, role):
         try:
-            host = OAG_Host((self, name), 'by_name')
+            host = OAG_Host((self, name), 'by_name')[-1]
+            print(f"====> Found previously generated entry for [{host.fqdn}]")
         except OAGraphRetrieveError:
-
+            print(f"====> Creating new entry for [{name}]")
             host =\
                 OAG_Host().db.create({
                     'site' : self,
@@ -1658,7 +1679,8 @@ def set_domain(domain,
     gen_domain = False
 
     if p_domain:
-        if domain==p_domain:
+        if domain==p_domain.domain:
+            print(f"====> Session domain found")
             return p_domain
         else:
             gen_domain = True
@@ -1666,11 +1688,12 @@ def set_domain(domain,
         gen_domain = True
 
     if gen_domain:
+        print(f"====> Generating new domain entry")
         try:
             p_domain = OAG_Domain(domain, 'by_domain')[-1]
+            print(f"====> Found previously generated entry for [{domain}]")
         except OAGraphRetrieveError:
-
-            # Create first entry for the domain
+            print(f"====> Generating entry for [{domain}]")
             with OADbTransaction('Create domain: %s' % domain):
                 p_domain =\
                     OAG_Domain().db.create({
