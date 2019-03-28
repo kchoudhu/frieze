@@ -396,7 +396,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, expose=False, custom_pkg=False):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, max_stripes=None, expose=False, custom_pkg=False):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If capdef doesn't specify cores or memory required, just go ahead
@@ -411,6 +411,9 @@ class OAG_Deployment(OAG_FriezeRoot):
 
             try:
                 cap = OAG_Capability((self, capdef.name), 'by_depl_capname')
+                if max_stripes and cap.size>=max_stripes:
+                    print(f"====> [{self.name}] All necessary [{capdef.name}] stripes already running (max {max_stripes})")
+                    return self
                 stripe_base = cap[-1].stripe+1
             except OAGraphRetrieveError:
                 stripe_base = 0
