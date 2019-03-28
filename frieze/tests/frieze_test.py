@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 
-import dateutil.relativedelta
-import unittest
 import sys
-
+import unittest
 sys.path.append('../..')
+from testhelper import *
 
+# Monkeypatch capabilities and then make them available
 import frieze
+frieze.capability.add('~/run/dist/frieze')
+import frieze.capability
+import frieze.hosttype
 
-from testhelper          import *
 
-from openarc             import *
-from openarc.env         import gctx
-from openarc.dao         import OADao
-from openarc.exception   import OAError
 
 class TestSubscriptions(unittest.TestCase, TestBase):
     def setUp(self):
@@ -25,205 +23,124 @@ class TestSubscriptions(unittest.TestCase, TestBase):
         pass
 
     def __show_domain_state(self, domain):
-        formatstr = "%-10s|%-20s|%-10s|%-10s|%-10s|%-15s|%-15s|%-15s"
+
+        print("Domain: %s" % domain.domain)
+        print("  Sites:      %d" % domain.site.size)
+        print("  Containers: %d" % domain.containers.size)
+
         for site in domain.site:
-            print("="*111)
             print("Site: %s (%s)" % (site.name, site.shortname))
-
+            print('Network Stats')
+            print(frieze.Netif.formatstr % ('iface', 'routingstyle', 'fib', 'bird', 'dhcpd', 'isgw', 'ip4', 'gw', 'bcast'))
+            print('   ', '-'*111)
             for host in site.host:
-                print('\n> %s\n' % host.fqdn)
-                print(formatstr % ('iface', 'routingstyle', 'bird', 'dhcpd', 'isgw', 'ip4', 'gw', 'bcast'))
-                print('-'*111)
+
+                print('  %s' % host.fqdn)
                 for iface in host.net_iface:
-                    print(formatstr % (
-                        iface.name,
-                        iface.routingstyle,
-                        iface.bird_enabled,
-                        iface.dhcpd_enabled,
-                        iface.is_gateway,
-                        iface.ip4,
-                        iface.gateway,
-                        iface.broadcast))
-                print('-'*111)
+                    iface.summarize()
+            print('   ', '-'*111)
 
-    def test_frieze_highlevel_api(self):
+            print('Host Tunable')
+            for host in site.host:
+                print('  %s:' % host.fqdn)
+                for tunable in host.sysctl:
+                    print('    %s %s' % (tunable.tunable, tunable.value))
 
-        domain = frieze.set_domain('anserinae.net')
+            print('Storage Stats')
+            print('  Block Devices Created: %d' % site.block_storage.size)
+            if site.block_storage.size > 0:
+                for block_storage in site.block_storage:
+                    print('   ', block_storage.blockstore_name)
+            print('  Host ZFS Mounts')
+            for host in site.compute_hosts:
+                zpool = str()
+                print('   ', host.fqdn)
+                if host.block_storage.size>0:
+                    for block_storage in host.block_storage:
+                        if zpool != block_storage.zpool:
+                            print('     ', block_storage.zpool)
+                            zpool = block_storage.zpool
+                        print('       ', block_storage.dataset, '->', block_storage.mount_point)
 
-        site = domain.add_site('New York Equinix Contract 1', 'ny1')
+            print('Container Stats')
+            for host in site.host:
+                print(' %s' % host.fqdn)
+                for container in host.containers:
+                    print('   %s: %d %s' % (container.fqdn, container.block_storage.size, container.ip4()))
 
-        # Create host template
-        host_template =\
-            frieze.HostTemplate(**{
-                'cpus'       : 1,
-                'memory'     : 1024,
-                'bandwidth'  : 1024,
-                'provider'   : frieze.Host.Provider.DIGITALOCEAN,
-                'interfaces' : [
-                    # Iface-----ext(t)/int(f)
-                    ('vtnet0',  True),
-                    ('vtnet1',  False),
-                ],
-                'sysctls' : [
-                    # Tunable--------------------------------boot----value
-                    (frieze.Tunable.F_HW_VTNET_CSUM_DISABLE, True,   "1"), # Do not checksum on VTNET interfaces
-                    (frieze.Tunable.F_NET_FIBS,              True,   "2")  # We need two routing tables (one for internal, one for external)
-                ]
+            # print('Container ZFS datasets')
+            # for container in site.containers:
+            #     cur_container = str()
+            #     print('  %s' % container.fqdn)
+            #     for block_storage in container.block_storage:
+            #         if container.fqdn != cur_container:
+            #             cur_container = container.fqdn
+            #         print('    %s' % block_storage.dataset)
+
+    def test_frieze_qa_env(self):
+
+
+        def init(snapcount):
+
+            # Create host template
+            class SmallCompute(frieze.hosttype.HostTemplate):
+                cores     = 1
+                memory    = 1024
+                bandwidth = 1024
+                os        = frieze.osinfo.HostOS.FreeBSD_12_0
+
+            print(f"===> Set domain")
+            domain = frieze.set_domain('openrelay.io', 'OpenRelay')
+
+            print(f"===> Adding site")
+            site = domain.add_site('Vultr NY1', 'ny1', frieze.Provider.VULTR, frieze.Location.NY)
+
+            print("===> Add bastion host")
+            sitebastion = site.add_host(**{
+                'template'  :  SmallCompute,
+                'name'      : 'installation01',
+                'role'      :  frieze.HostRole.SITEBASTION
             })
 
-        # Add 2 compute hosts. Right now, both of these hosts are default
-        # externally routed, EVEN if they have more than one network interface
-        for i, hostname in enumerate(['particularjustice', 'ascendantjustice']):
-            host = site.add_host(**{
-                'template'  : host_template,
-                'name'      : hostname,
-                'role'      : frieze.Host.Role.COMPUTE
-            })
+            # Add compute
+            print("===> Add compute hosts")
+            for i, hostname in enumerate(['particularjustice', 'ascendantjustice']):
+                host = site.add_host(**{
+                    'template'  : SmallCompute,
+                    'name'      : hostname,
+                    'role'      : frieze.HostRole.COMPUTE
+                })
+                # print("[%s] has [%d] caps running" % (host.fqdn, host.capability.size))
 
-        # No sitebastion yet
-        try:
-            site.bastion
-        except OAError:
-            pass
+            print("===> Add deployment: infra")
+            infra_depl = domain.add_deployment("infra", affinity=site)
 
-        # Adding a sitebastion initiates a routing setup that routes all external
-        # compute host traffic through the sitebastion (i.e. the sitebastion
-        # becomes the default gateway). The hosts still remain accessible through
-        # internet, but ONLY via SSH, and ONLY on fib 1. Additionally, the
-        # external facing interface
-        sitebastion = site.add_host(**{
-            'template'  : host_template,
-            'name'      : 'installation01',
-            'role'      : frieze.Host.Role.SITEBASTION
-        })
 
-        host = site.add_host(**{
-            'template'  : host_template,
-            'name'      : 'regnaljustice',
-            'role'      : frieze.Host.Role.COMPUTE
-        })
+            print("===> Add deployment capabilities")
+            infra_depl.add_capability(frieze.capability.openrelay(), max_stripes=1, custom_pkg=True)\
+                      .add_capability(frieze.capability.nginx(),     max_stripes=2, expose=True)\
+                      .add_capability(frieze.capability.postgres(),  max_stripes=1)
 
-        site = domain.add_site('New York Equinix Contract 2', 'ny2')
+            print("===> Add deployment: app")
+            app_depl = domain.add_deployment("app", affinity=site)
 
-        # Add 2 compute hosts. Right now, both of these hosts are default
-        # externally routed, EVEN if they have more than one network interface
-        for i, hostname in enumerate(['particularjustice', 'ascendantjustice']):
-            host = site.add_host(**{
-                'template'  : host_template,
-                'name'      : hostname,
-                'role'      : frieze.Host.Role.COMPUTE
-            })
+            print("===> Add capabilities")
+            app_depl.add_capability(frieze.capability.nginx(), stripes=2, max_stripes=2)
 
-        # No sitebastion yet
-        try:
-            site.bastion
-        except OAError:
-            pass
+            print("===> Snapshot domain")
+            snap = domain.snapshot(f"QA deployment {snapcount}")
 
-        # Adding a sitebastion initiates a routing setup that routes all external
-        # compute host traffic through the sitebastion (i.e. the sitebastion
-        # becomes the default gateway). The hosts still remain accessible through
-        # internet, but ONLY via SSH, and ONLY on fib 1. Additionally, the
-        # external facing interface
-        sitebastion = site.add_host(**{
-            'template'  : host_template,
-            'name'      : 'installation01',
-            'role'      : frieze.Host.Role.SITEBASTION
-        })
+            print("===> Deploy snaphot")
+            snap.deploy(push=False)
 
-        host = site.add_host(**{
-            'template'  : host_template,
-            'name'      : 'regnaljustice',
-            'role'      : frieze.Host.Role.COMPUTE
-        })
+            return site
 
-        # Like other templates, we would expect to define this in a config.
-        # But hey, frieze is configuration for *programmers*. Let's define a
-        # few services and cobble them together
-        openrelayd_template =\
-            frieze.AppTemplate(name="openrelay_restd")
 
-        msqlsd_template =\
-            frieze.AppTemplate(name="mysqld")
-
-        nextcloud_tempalte =\
-            frieze.AppTemplate(name="nextcloud")
-
-        # Here we see an application specifying its required mounts. For every
-        # instance of this application, a block store will be mounted on the host
-        # the application's container is running on; once mounted, a zpool is
-        # created and datasets created within it.
-        #
-        # In this example, the zpool will be called postgres, and the following
-        # datasets are created:
-        #
-        # - postgres
-        # - postgres/wal
-        # - postgres/data
-        # - postgres/extra
-        #
-        # Sharing the same mount across multiple application containers is not
-        # yet supported.
-        postgres_template =\
-            frieze.AppTemplate(name="postgres", mounts=[ 'wal', 'data', 'extra' ])
-
-        # Define a deployment to hold our applications, and define where it runs
-        # by adding it to the site.
-        #
-        # Deployments run on a separate VLAN, and can span multiple sites.
-        # Sitebastions therefore have to be aware of all possible vlans. The
-        # call to add_deployment adds these vlans across the board
-        infra_depl = domain.add_deployment("infra", affinity=site)
-
-        openrelay_depl = domain.add_deployment("openrelay", affinity=site)
-
-        # Deployments run applications inside containers. Use the "stripes" param
-        # to specify how many containers to use; one stripe = one instance of
-        # the application running in a container
-        #
-        # The affinity parameter defines what site you want to run these app
-        # stripes on. It is binding: if there are more stripes than slots for
-        # them on compute hosts on the site, the overflowing stripes won't run
-        infra_depl.add_application(openrelayd_template, affinity=site, stripes=4)
-
-        # Application stripes without an affinity are deployed on whatever compute
-        # hosts are available. If slots run out, the overflowing stripes won't run
-        infra_depl.add_application(openrelayd_template, stripes=4)
-
-        # An application without stripes will default to initializing one stripe.
-        infra_depl.add_application(postgres_template, affinity=site, stripes=2)
-
-        print('Container Stats')
-        print(' ', 'domain:', domain.containers.size)
-        print(' ', 'site  :', site.containers.size)
-        print(' ', 'host  :', host.containers.size)
-
-        print('Host Tunable')
-        for tunable in host.sysctls:
-            print(' ', tunable.tunable, tunable.value)
-
-        print('Storage Stats')
-        print(' ', 'Block Devices Created')
-        for block_storage in site.block_storage:
-            print('   ', block_storage.blockstore_name)
-        print(' ', 'Host ZFS Mounts')
-        for host in site.compute_hosts:
-            zpool = str()
-            print('   ', host.fqdn)
-            for block_storage in host.block_storage:
-                if zpool != block_storage.zpool:
-                    print('     ', block_storage.zpool)
-                    zpool = block_storage.zpool
-                print('       ', block_storage.dataset, '->', block_storage.mount_pount)
-
-        print(' ', 'Container ZFS datasets')
-        for container in site.containers:
-            cur_container = str()
-            print('   ', container.fqdn)
-            for block_storage in container.block_storage:
-                if container.fqdn != cur_container:
-                    cur_container = container.fqdn
-                print('     ', block_storage.dataset)
+        for snapcount in range(2):
+            if snapcount>0:
+                domain = site.txnclone().root_domain
+            site = init(snapcount)
+            print("======>")
 
     class SQL(TestBase.SQL):
         pass
