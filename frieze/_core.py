@@ -177,6 +177,14 @@ class OAG_FriezeRoot(OAG_RootNode):
                     for cap in depl.capability:
                         n_cap = self.db_clone_with_changes(cap)
 
+                        if cap.capability_required_mount:
+                            for crm in cap.capability_required_mount:
+                                n_crm = self.db_clone_with_changes(crm)
+
+                        if cap.capability_knob:
+                            for ckb in cap.capability_knob:
+                                n_ckb = self.db_clone_with_chnages(ckb)
+
             for subnet in self.root_domain.subnet:
                 n_subnet = self.db_clone_with_changes(subnet)
 
