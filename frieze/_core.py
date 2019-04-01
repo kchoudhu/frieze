@@ -6,7 +6,7 @@ __all__ = [
     'Host',
     'HostRole', 'HostOS',
     'Tunable', 'TunableType',
-    'Provider', 'Location',
+    'Location',
     'FIB', 'Netif', 'NetifType', 'SubnetType',
     'Deployment',
     'Container',
@@ -39,6 +39,7 @@ from openarc.exception import OAGraphRetrieveError, OAError
 
 from frieze.auth import CertAuth, CertFormat
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
+from frieze.provider import CloudProvider, ExtCloud, Location
 from frieze.capability import\
     ConfigGenFreeBSD, ConfigInit, CapabilityTemplate,\
     dhclient as dhc, bird, dhcpd, firstboot, gateway, jail,\
@@ -55,21 +56,12 @@ class HostRole(enum.Enum):
     COMPUTE      = 3
     STORAGE      = 4
 
-class Location(enum.Enum):
-    NY           = 1
-    LONDON       = 2
-
 class NetifType(enum.Enum):
     PHYSICAL    = 1
     OVPN_SERVER = 2
     OVPN_CLIENT = 3
     VLAN        = 4
     BRIDGE      = 5
-
-class Provider(enum.Enum):
-    DIGITALOCEAN = 1
-    VULTR        = 2
-    DC           = 3
 
 class RoutingStyle(enum.Enum):
     DHCP        = 1
@@ -929,12 +921,16 @@ class OAG_Host(OAG_FriezeRoot):
                 updated = 0
                 dhclients = self.capability.rdf.filter(lambda x: x.service=='dhclient') if self.capability else []
                 for i, dhclient in enumerate(dhclients):
-                    dhclient.db.update({
-                        'start_rc' : False,
-                        'start_local' : True,
-                        'start_local_prms' : dhcp_ifaces[i].name,
-                        'fib' : self.fibs[updated]
-                    })
+                    try:
+                        dhclient.db.update({
+                            'start_rc' : False,
+                            'start_local' : True,
+                            'start_local_prms' : dhcp_ifaces[i].name,
+                            'fib' : self.fibs[updated]
+                        })
+                    except Exception as e:
+                        print(e)
+                        raise
                     updated += 1
 
                 # Create remaining required dhclients (i.e. for current interface)
@@ -1057,7 +1053,6 @@ class OAG_Host(OAG_FriezeRoot):
 
     @property
     def rootdisk(self):
-        from ._provider import ExtCloud
         return ExtCloud(self.site.provider).block_rootdisk()
 
     @property
@@ -1182,7 +1177,6 @@ class OAG_NetIface(OAG_FriezeRoot):
     def mtu(self):
         """Return None if interface autonegotiates, otherwise value returned by
         cloud provider"""
-        from ._provider import ExtCloud
         return ExtCloud(self.host.site.provider).network_iface_mtu(external=self.is_external)
 
     @property
@@ -1260,11 +1254,11 @@ class OAG_Site(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'domain'    : [ OAG_Domain, True,  None ],
-        'name'      : [ 'text',     str(), None ],
-        'shortname' : [ 'text',     str(), None ],
-        'provider'  : [ Provider,   True,  None ],
-        'location'  : [ Location,   True,  None ],
+        'domain'    : [ OAG_Domain,     True,  None ],
+        'name'      : [ 'text',         str(), None ],
+        'shortname' : [ 'text',         str(), None ],
+        'provider'  : [ CloudProvider,  True,  None ],
+        'location'  : [ Location,       True,  None ],
     }
 
     @friezetxn
@@ -1396,7 +1390,6 @@ class OAG_Site(OAG_FriezeRoot):
     def prepare_infrastructure(self):
 
         # Prep the external provider
-        from ._provider import ExtCloud
         extcloud = ExtCloud(self.provider)
 
         # Create your server configinit tarball

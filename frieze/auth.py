@@ -33,6 +33,8 @@ from marshmallow.exceptions import ValidationError
 
 from openarc.oatime import OATime
 
+from frieze.provider import ExtCloud
+
 class CertFormat(enum.Enum):
     SSH = 1
     PEM = 2
@@ -59,8 +61,6 @@ class CertAuth(object):
                 return f.read()
 
     def distribute(self):
-        from ._provider import ExtCloud
-
         # Publish our certificate authority in SSH form.
         for site in self.domain.site:
             extcloud = ExtCloud(site.provider)

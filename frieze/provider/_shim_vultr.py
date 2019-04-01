@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-__all__ = ['ExtCloud']
+__all__ = ['VultrShim']
 
 import base64
 import enum
@@ -12,68 +12,7 @@ import gevent
 
 from openarc.env import getenv
 
-class CloudInterface(object):
-    """Minimal functionality that needs to be implemented by a deriving shim
-    to a cloud service"""
-    def block_attach(self, blockstore):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def block_create(self, blockstore):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def block_detatch(self, blockstore):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def block_delete(self, subid):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def block_delete_mark(self, subid, label):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def block_list(self, show_delete=False):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def block_rootdisk(self):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def network_attach(self, host, network):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def network_create(self, site, label=None):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def network_iface_mtu(self, external=True):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def network_list(self, show_delete=False):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def server_create(self, host, networks=[], snapshot=None, label=None):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def server_delete_mark(self, server):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def server_list(self, show_delete=False):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def metadata_set_user_data(self, userdata):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def server_private_network_list(self):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def snapshot_list(self):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def sshkey_create(self, certauthority):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def sshkey_destroy(self, keyid):
-        raise NotImplementedError("Implement in deriving Shim")
-
-    def sshkey_list(self):
-        raise NotImplementedError("Implement in deriving Shim")
+from ._interface import CloudInterface
 
 class VultrShim(CloudInterface):
 
@@ -96,7 +35,7 @@ class VultrShim(CloudInterface):
         FreeBSD_12_0  = 327
 
     def bin_location(self, location):
-        from ._core import Location as fLocation
+        from .public import Location as fLocation
         ret = None
         if location==fLocation.NY:
             ret = self.Location.NA_EWR
@@ -128,7 +67,7 @@ class VultrShim(CloudInterface):
         return ret.value
 
     def bin_os(self, os, snapshot):
-        from .osinfo import HostOS as fHostOS
+        from ..osinfo import HostOS as fHostOS
         ret = None
         if snapshot:
             ret = self.OS.SNAPSHOT
@@ -332,21 +271,3 @@ class VultrShim(CloudInterface):
             'asset'      : v,
         } for k, v in ({} if len(api_ret)==0 else api_ret.items())]
         return sorted(rets, key=lambda x: x['crdatetime'], reverse=True)
-
-class ExtCloud(object):
-
-    def __init__(self, provider, apikey=None):
-
-        # Import munging
-        from ._core import Provider
-        self.provdef = Provider
-
-        #
-        self.provider = provider
-        self._api = {
-            self.provdef.VULTR : VultrShim(apikey)
-            # Add more providers as support is added
-        }[self.provider]
-
-    def __getattr__(self, attr):
-        return getattr(self._api, attr, None)
