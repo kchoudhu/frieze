@@ -1,10 +1,15 @@
-#!/usr/bin/env python3
+__all__ = [
+    'CertAuth',
+    'CertFormat',
+    'ExtDNS'
+]
 
+import datetime
 import enum
-import os
 import openarc.env
 import openarc.exception
-import datetime
+import os
+import pprint
 import secrets
 import string
 import time
@@ -351,3 +356,40 @@ class CertAuth(object):
             return rootca_key
         else:
             return None
+
+class ExtDNS(object):
+
+    def __init__(self, domain):
+        from ...provider import CloudProvider
+        self.domain = domain
+        self.provider = CloudProvider[openarc.env.getenv('frieze').extdns['provider'].upper()]
+
+    def distribute(self):
+        from ..._core import FIB
+
+        # Generate list of aliases that need to be created
+        needed = {}
+        for site in self.domain.site:
+            bastion_ip = site.bastion.ip4(fib=FIB.WORLD)
+            for cap in site.capability_expose:
+                for ca in cap.capability_alias:
+                    needed[ca.alias] = bastion_ip
+
+        # Initialize provider
+        extcloud = ExtCloud(self.provider)
+
+        # Update resource
+        extzone = extcloud.dns_list_zones(name=self.domain.domain)[0]
+
+        # Get list of records already there, update or create them as necessary
+        ext_aliases = {r['name']:r for r in extcloud.dns_list_records(extzone, types=['A'])}
+        for alias, expected_ip in needed.items():
+            if alias in ext_aliases and expected_ip==ext_aliases[alias]['value']:
+                print(f"No update required for alias [{alias}], it is already set to [{expected_ip}]")
+                continue
+            try:
+                print(f"Updating existing records for alias [{alias}]: {ext_aliases[alias]['value']} -> {expected_ip}")
+            except KeyError:
+                print(f"Creating new record for alias [{alias}]: {expected_ip}")
+
+            extcloud.dns_upsert_record(extzone['vsubid'], self.domain, alias, expected_ip)

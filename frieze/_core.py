@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 __all__ = [
     'Domain',
     'Site',
@@ -26,6 +24,7 @@ import pkg_resources as pkg
 import pwd
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import toml
@@ -37,13 +36,14 @@ from openarc.dao import OADbTransaction
 from openarc.graph import OAG_RootNode
 from openarc.exception import OAGraphRetrieveError, OAError
 
-from frieze.auth import CertAuth, CertFormat
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
 from frieze.provider import CloudProvider, ExtCloud, Location
 from frieze.capability import\
     ConfigGenFreeBSD, ConfigInit, CapabilityTemplate,\
     dhclient as dhc, bird, dhcpd, firstboot, gateway, jail,\
     named, pf, pflog, resolvconf, zfs
+from frieze.capability.server import\
+    CertAuth, ExtDNS
 
 #### Some enums
 class FIB(enum.Enum):
@@ -183,7 +183,11 @@ class OAG_FriezeRoot(OAG_RootNode):
 
                         if cap.capability_knob:
                             for ckb in cap.capability_knob:
-                                n_ckb = self.db_clone_with_chnages(ckb)
+                                n_ckb = self.db_clone_with_changes(ckb)
+
+                        if cap.capability_alias:
+                            for ca in cap.capability_alias:
+                                n_ca = self.db_clone_with_changes(ca)
 
             for subnet in self.root_domain.subnet:
                 n_subnet = self.db_clone_with_changes(subnet)
@@ -223,7 +227,7 @@ class OAG_Capability(OAG_FriezeRoot):
         'start_local_prms':
                        [ 'text',         None,  None ],
         'fib'        : [ FIB,            True,  None ],
-        'expose'     : [ 'bool',         True,  None ],
+        'expose'     : [ OAG_Site,       False, None ],
         'custom_pkg' : [ 'bool',         False, None ],
     }
 
@@ -245,7 +249,7 @@ class OAG_Capability(OAG_FriezeRoot):
 
     @property
     def fqdn(self):
-        return "%s.%s.%s" % (self.name, self.deployment.name, self.deployment.domain.domain)
+        return f"{self.name}.{self.deployment.name}.{self.deployment.domain.domain}"
 
     @property
     def name(self):
@@ -262,6 +266,24 @@ class OAG_Capability(OAG_FriezeRoot):
     @property
     def slot_factor(self):
         return (self.cores if self.cores else 0.25) * (self.memory if self.memory else 256)
+
+class OAG_CapabilityAlias(OAG_FriezeRoot):
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+    }
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'capability' : [ OAG_Capability, True,  None ],
+        'alias'      : [ 'text',         True,  None ],
+        'external'   : [ 'boolean',      True,  None ],
+    }
 
 class OAG_CapabilityKnob(OAG_FriezeRoot):
 
@@ -396,7 +418,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, max_stripes=None, expose=False, custom_pkg=False):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, max_stripes=None, expose=None, external_alias=[], custom_pkg=False):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If capdef doesn't specify cores or memory required, just go ahead
@@ -407,7 +429,9 @@ class OAG_Deployment(OAG_FriezeRoot):
         if isinstance(capdef, CapabilityTemplate):
 
             if not capdef.jailable:
-                raise OAError("Application [%s] is not jailable and cannot be added to deployment")
+                raise OAError(f"Capability [{capdef.name}] is not jailable and cannot be added to deployment")
+            if expose and not external_alias:
+                raise OAError(f"Exposed capability [{capdef.name}] *must* have external DNS alias")
 
             try:
                 cap = OAG_Capability((self, capdef.name), 'by_depl_capname')
@@ -437,6 +461,14 @@ class OAG_Deployment(OAG_FriezeRoot):
                             'expose' : expose,
                             'custom_pkg' : custom_pkg,
                         })
+
+                    for alias in external_alias:
+                        capalias =\
+                            OAG_CapabilityAlias().db.create({
+                                'capability' : cap,
+                                'alias' : alias,
+                                'external' : True
+                            })
 
                     for (mount, size_gb) in capdef.mounts:
                         capmount =\
@@ -736,6 +768,11 @@ class OAG_Domain(OAG_FriezeRoot):
         for site in self.site:
             site.prepare_infrastructure()
 
+        # Update external DNS to make sure all services are visible. This
+        # has to be after infrastructure is prepared to ensure clean IP
+        # information is available for machines.
+        self.extdns.distribute()
+
         # Issue SSH credential and use it to push to all hosts. Wrap in tempfile
         # to ensure that files are wiped out after context manager __exit__s.
         with tempfile.TemporaryDirectory() as td:
@@ -769,6 +806,10 @@ class OAG_Domain(OAG_FriezeRoot):
 
                 # We'll need to log output here
                 print(output)
+
+    @oagprop
+    def extdns(self, **kwargs):
+        return ExtDNS(self)
 
     @property
     def is_frozen(self):
@@ -1501,6 +1542,18 @@ class OAG_Site(OAG_FriezeRoot):
     @property
     def zone(self):
         return('%s.%s' % (self.shortname, self.domain.domain))
+
+    @oagprop
+    def expose_map(self, **kwargs):
+        expose_ips = {}
+        for cap in self.capability_expose:
+            for depl in self.domain.deployment:
+                for container in depl.containers:
+                    if cap.fqdn==container.capability.fqdn:
+                        for port in cap.c_capability.ports:
+                            expose_ips.setdefault(str(port), []).append(container.ip4())
+        print(expose_ips)
+        return expose_ips
 
 class OAG_Subnet(OAG_FriezeRoot):
     """Subnets are doled out on a per-domain basis and then assigned to

@@ -9,7 +9,7 @@ import enum
 class CloudProvider(enum.Enum):
     DIGITALOCEAN = 1
     VULTR        = 2
-    DC           = 3
+    AWS          = 3
 
 class Location(enum.Enum):
     NY           = 1
@@ -21,10 +21,12 @@ class ExtCloud(object):
 
         # Import munging
         from ._shim_vultr import VultrShim
+        from ._shim_aws   import AwsShim
 
         self.provider = provider
         self._api = {
-            CloudProvider.VULTR : VultrShim(apikey)
+            CloudProvider.VULTR : VultrShim(apikey),
+            CloudProvider.AWS   : AwsShim(apikey)
             # Add more providers as support is added
         }[self.provider]
 

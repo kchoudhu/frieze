@@ -18,6 +18,7 @@ setup(name='frieze',
       package_data={'frieze' : ['capability/resources/*/*']},
       install_requires=[
         'bless',
+        'boto3',
         'cryptography',
         'mako',
         'openarc',
