@@ -65,8 +65,17 @@ class ConfigGenFreeBSD(object):
                 None : {},
             }[capability.start_rc]
 
-            service = getattr(importlib.import_module('frieze.capability'), capability.service)()
+            capmod = importlib.import_module('frieze.capability')
 
+            # Generate capability configs
+            service = getattr(capmod, capability.service)()
+            rv = {**rv, **service.generate_cfg_files(self.rununit)}
+
+            # Generate trusts for this host
+            trust = getattr(capmod, 'trust')()
+            rv = {**rv, **trust.generate_cfg_files(self.rununit)}
+
+            # Generate auto start/custom start configurations
             if capability.start_rc:
                 if capability.fib==FIB.WORLD:
                     rv[ConfigFile.RC_CONF][knob_fib] = capability.fib.value
@@ -81,9 +90,7 @@ class ConfigGenFreeBSD(object):
                     knob = '%s_%s' % (capability.service, cck.knob)
                     rv[ConfigFile.RC_CONF][knob] = cck.value
 
-            # Generate configurations if present in resources
-            rv = {**rv, **service.generate_cfg_files(self.rununit)}
-
+            # Force install of custom packages
             if capability.custom_pkg:
                 install_commands = [
                     f'yes | pkg delete {service.name}',
@@ -172,7 +179,6 @@ class ConfigGenFreeBSD(object):
             self.cfg[ConfigFile.RC_LOCAL] = [v for k, v in self.cfg[ConfigFile.RC_LOCAL].items()]
         except KeyError:
             pass
-
 
         return self.cfg
 

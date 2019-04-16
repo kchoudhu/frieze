@@ -16,6 +16,7 @@ import collections
 import enum
 import frieze.capability
 import gevent
+import hashlib
 import io
 import ipaddress
 import openarc.env
@@ -43,7 +44,7 @@ from frieze.capability import\
     dhclient as dhc, bird, dhcpd, firstboot, gateway, jail,\
     named, pf, pflog, resolvconf, zfs
 from frieze.capability.server import\
-    CertAuth, ExtDNS
+    TrustType, CertAction, CertAuthInternal, CertAuthLetsEncrypt, ExtDNS
 
 #### Some enums
 class FIB(enum.Enum):
@@ -228,6 +229,7 @@ class OAG_Capability(OAG_FriezeRoot):
                        [ 'text',         None,  None ],
         'fib'        : [ FIB,            True,  None ],
         'expose'     : [ OAG_Site,       False, None ],
+        'secure'     : [ 'bool',         True,  None ],
         'custom_pkg' : [ 'bool',         False, None ],
     }
 
@@ -252,6 +254,13 @@ class OAG_Capability(OAG_FriezeRoot):
         return f"{self.name}.{self.deployment.name}.{self.deployment.domain.domain}"
 
     @property
+    def fqdn_ext(self):
+        if self.capability_alias and self.capability_alias.is_external:
+            return self.capability_alias.fqdn
+        else:
+            return None
+
+    @property
     def name(self):
         return "%s%d" % (self.service, self.stripe)
 
@@ -267,6 +276,24 @@ class OAG_Capability(OAG_FriezeRoot):
     def slot_factor(self):
         return (self.cores if self.cores else 0.25) * (self.memory if self.memory else 256)
 
+    def truststore(self, pubkey=True, internal=False):
+        """Return directory where certificates related to this capability are stored on disk"""
+        if self.capability_alias and self.capability_alias.is_external:
+            aliases = [ca.fqdn for ca in self.capability_alias]
+        else:
+            aliases = [self.fqdn]
+
+        aliases.sort()
+
+        inferred_name = hashlib.sha256(','.join(aliases).encode('utf-8')).hexdigest()
+
+        return os.path.join(
+            '/usr/local/etc/trust',
+            'internal' if internal else 'external',
+             inferred_name,
+            'chain.crt' if pubkey else 'private.pem'
+        )
+
 class OAG_CapabilityAlias(OAG_FriezeRoot):
     @staticproperty
     def context(cls): return "frieze"
@@ -280,10 +307,14 @@ class OAG_CapabilityAlias(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'capability' : [ OAG_Capability, True,  None ],
-        'alias'      : [ 'text',         True,  None ],
-        'external'   : [ 'boolean',      True,  None ],
+        'capability'  : [ OAG_Capability, True,  None ],
+        'alias'       : [ 'text',         True,  None ],
+        'is_external' : [ 'boolean',      True,  None ],
     }
+
+    @property
+    def fqdn(self):
+        return f'{self.alias}.{self.capability.deployment.domain.domain}' if self.alias else self.capability.deployment.domain.domain
 
 class OAG_CapabilityKnob(OAG_FriezeRoot):
 
@@ -418,7 +449,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, max_stripes=None, expose=None, external_alias=[], custom_pkg=False):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, max_stripes=None, expose=None, external_alias=[], secure=False, custom_pkg=False):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If capdef doesn't specify cores or memory required, just go ahead
@@ -459,6 +490,7 @@ class OAG_Deployment(OAG_FriezeRoot):
                             # are always on the default (internal) routing table
                             'fib' : FIB.DEFAULT,
                             'expose' : expose,
+                            'secure' : secure,
                             'custom_pkg' : custom_pkg,
                         })
 
@@ -467,7 +499,7 @@ class OAG_Deployment(OAG_FriezeRoot):
                             OAG_CapabilityAlias().db.create({
                                 'capability' : cap,
                                 'alias' : alias,
-                                'external' : True
+                                'is_external' : True
                             })
 
                     for (mount, size_gb) in capdef.mounts:
@@ -575,12 +607,6 @@ class OAG_Domain(OAG_FriezeRoot):
 
         return site
 
-    def assign_certificate_authority(self):
-        if not self.certauthority.is_valid:
-            self.certauthority.generate()
-        else:
-            print("Not refreshing certificate authority")
-
     @friezetxn
     def assign_subnet(self, type_, hosts_expected=254, iface=None, dynamic_hosts=0, deployment=None):
 
@@ -636,9 +662,11 @@ class OAG_Domain(OAG_FriezeRoot):
                 'dynamic_hosts' : dynamic_hosts
             })
 
-    @oagprop
-    def certauthority(self, **kwargs):
-        return CertAuth(self)
+    def trust(self, trust_type=TrustType.INTERNAL):
+        return {
+            TrustType.INTERNAL    : CertAuthInternal,
+            TrustType.LETSENCRYPT : CertAuthLetsEncrypt
+        }[trust_type](self)
 
     @oagprop
     def containers(self, **kwargs):
@@ -761,7 +789,7 @@ class OAG_Domain(OAG_FriezeRoot):
         # Atomically distribute the cert authority to all sites so that
         # we can link them to the servers that are going to be set up
         # shortly
-        self.certauthority.distribute()
+        self.trust().distribute_authority()
 
         # Issue command to create hosts, networking between them, and
         # storage.
@@ -782,9 +810,11 @@ class OAG_Domain(OAG_FriezeRoot):
 
             # SSH credential creation
             (id_file, id_file_pub) =\
-                self.certauthority.issue_ssh_certificate(
-                    pwd.getpwuid(os.getuid())[0],                       # user
-                    f'Deploy [{self.domain}:{self.version_name}]',      # command name
+                self.trust().issue_certificate(
+                    pwd.getpwuid(os.getuid())[0],                       # subject
+                    CertAction.HOST_ACCESS_AUTO.desc(
+                        info=f'[{self.domain}:{self.version_name}]'
+                    ),
                     serialize_to_dir=os.path.join(td, '.ssh')           # where to serialize
                 )
 
@@ -857,7 +887,7 @@ class OAG_Host(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT, expose=False, custom_pkg=False):
+    def add_capability(self, capdef, enable_state=None, fib=FIB.DEFAULT, custom_pkg=False):
         """Run a capability on a host. Enable it."""
         if isinstance(capdef, CapabilityTemplate):
             create = True
@@ -881,7 +911,8 @@ class OAG_Host(OAG_FriezeRoot):
                             'start_rc' : enable_state,
                             'start_local' : False,
                             'fib' : fib,
-                            'expose' : expose,
+                            'expose' : False,
+                            'secure' : False,
                             'custom_pkg' : custom_pkg,
                         })
 
@@ -997,6 +1028,7 @@ class OAG_Host(OAG_FriezeRoot):
                         'start_local_prms' : dhcp_ifaces[i].name,
                         'fib' : self.fibs[i],
                         'expose' : False,
+                        'secure' : False,
                         'custom_pkg' : False,
                     })
 
@@ -1769,6 +1801,6 @@ def set_domain(domain,
                 p_domain.assign_subnet(SubnetType.SITE, hosts_expected=254)
 
                 # Generate a certificate authority
-                p_domain.assign_certificate_authority()
+                p_domain.trust().initialize()
 
     return p_domain

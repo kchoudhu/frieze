@@ -16,6 +16,7 @@ __all__ = [
     'pflog',
     'resolvconf',
     'sshd',
+    'trust',
     'zfs'
 ]
 
@@ -289,6 +290,39 @@ class openssh(CapabilityTemplate):
 class resolvconf(CapabilityTemplate): pass
 
 class sshd(CapabilityTemplate): pass
+
+class trust(CapabilityTemplate):
+
+    def generate_cfg_files(self, host):
+        rv = {}
+
+        # Generate trusts
+        if type(host)!=frieze.Container:
+            return rv
+
+        from .server import TrustType, CertAction, CertFormat
+
+        pkg_name = 'frieze.capability.resources.%s' % self.name
+        crt_template  = pkg.resource_string(pkg_name, 'chain.crt')
+        priv_template = pkg.resource_string(pkg_name, 'private.pem')
+
+        cap = host.capability
+        if cap.capability_alias and cap.capability_alias.is_external:
+            print(f'======>Generating trusts for [{cap.fqdn}]')
+            aliases = [ca.fqdn for ca in cap.capability_alias]
+            cert =\
+                cap.deployment.domain\
+                .trust(trust_type=TrustType.LETSENCRYPT)\
+                .issue_certificate(
+                    aliases,
+                    CertAction.REMOTE_ACCESS,
+                    cert_format=CertFormat.PEM
+                )
+
+            rv[cap.truststore(pubkey=True)]  = mako.template.Template(crt_template).render(cap=cap, cert=cert)
+            rv[cap.truststore(pubkey=False)] = mako.template.Template(priv_template).render(cap=cap, cert=cert)
+
+        return rv
 
 class zfs(CapabilityTemplate):
 

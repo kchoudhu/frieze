@@ -11,8 +11,6 @@ frieze.capability.add('~/run/dist/frieze')
 import frieze.capability
 import frieze.hosttype
 
-
-
 class TestSubscriptions(unittest.TestCase, TestBase):
     def setUp(self):
         self.setUp_db()
@@ -93,7 +91,12 @@ class TestSubscriptions(unittest.TestCase, TestBase):
             domain = frieze.set_domain('openrelay.io', 'OpenRelay')
 
             print(f"===> Adding site")
-            site = domain.add_site('Vultr NY1', 'ny1', frieze.Provider.VULTR, frieze.Location.NY)
+            site =\
+                domain.add_site(
+                    'Vultr NY1', 'ny1',
+                    frieze.provider.CloudProvider.VULTR,
+                    frieze.provider.Location.NY
+                )
 
             print("===> Add bastion host")
             sitebastion = site.add_host(**{
@@ -110,33 +113,54 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                     'name'      : hostname,
                     'role'      : frieze.HostRole.COMPUTE
                 })
-                # print("[%s] has [%d] caps running" % (host.fqdn, host.capability.size))
 
             print("===> Add deployment: infra")
             infra_depl = domain.add_deployment("infra", affinity=site)
 
 
+            # Capabilities can be added to deployments using a chain of add_capability calls.
+            #
+            # stripes:        number of stripes of the capability need to be added.
+            # max_stripes:    number of stripes of the capability the deployment can hold. If
+            #                 specified, can override stripes parameter.
+            # expose:         capability can be accessed via egress site bastion. If there is
+            #                 more than one stripe, sitebastion will loadbalance between all known
+            #                 stripes
+            # external_alias: required if expose parameter is set, list of domain aliases to be
+            #                 set in external DNS manager
             print("===> Add deployment capabilities")
-            infra_depl.add_capability(frieze.capability.openrelay(), max_stripes=1, custom_pkg=True)\
-                      .add_capability(frieze.capability.nginx(),     max_stripes=2, expose=True)\
-                      .add_capability(frieze.capability.postgres(),  max_stripes=1)
+            infra_depl\
+                .add_capability(
+                    frieze.capability.openrelay(),
+                    max_stripes=1,
+                    custom_pkg=True
+                ).add_capability(
+                    frieze.capability.postgres(),
+                    max_stripes=1
+                ).add_capability(
+                    frieze.capability.nginx(),
+                    stripes=2,
+                    max_stripes=2,
+                    expose=site,
+                    secure=True,
+                    external_alias=['', 'www']
+                )
 
             print("===> Add deployment: app")
             app_depl = domain.add_deployment("app", affinity=site)
 
-            print("===> Add capabilities")
-            app_depl.add_capability(frieze.capability.nginx(), stripes=2, max_stripes=2)
+            print("===> Add deployment capabilities")
+            app_depl.add_capability(frieze.capability.nginx(), stripes=1, max_stripes=2)
 
             print("===> Snapshot domain")
             snap = domain.snapshot(f"QA deployment {snapcount}")
 
-            print("===> Deploy snaphot")
-            snap.deploy(push=False)
+            print("===> Deploy snapshot")
+            snap.deploy(push=True)
 
             return site
 
-
-        for snapcount in range(2):
+        for snapcount in range(1):
             if snapcount>0:
                 domain = site.txnclone().root_domain
             site = init(snapcount)

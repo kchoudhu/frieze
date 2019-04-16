@@ -1,0 +1,2 @@
+>${cap.truststore(pubkey=True)} 0600
+${cert.chain}

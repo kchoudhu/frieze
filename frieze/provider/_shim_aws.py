@@ -33,29 +33,26 @@ class AwsShim(CloudInterface):
         api_ret = self.api.list_resource_record_sets(HostedZoneId=zone['vsubid'])
         return [{
             'vsubid' : zone['vsubid'],
-            'name'   : rr['Name'][:-1].replace(zone['domain'], '')[:-1],
+            'name'   : rr['Name'][:-1],
             'type'   : rr['Type'],
             'value'  : rr['ResourceRecords'][0]['Value'],
             'asset'  : rr
         } for rr in api_ret['ResourceRecordSets'] if (rr['Type'] in types if types else True)]
 
-    def dns_upsert_record(self, vsubid, domain, alias, ip, ttl=60, type_='A'):
+    def dns_upsert_record(self, vsubid, key, value, ttl=60, type_='A'):
         self.api.change_resource_record_sets(
             HostedZoneId=vsubid,
             ChangeBatch={
                 'Changes' : [{
                     'Action' : 'UPSERT',
                     'ResourceRecordSet':{
-                        'Name'  : f'{alias}.{domain.domain}',
+                        'Name'  : key,
                         'Type'  : type_,
                         'TTL'   : ttl,
                         'ResourceRecords' : [{
-                            'Value' : ip
+                            'Value' : '"%s"' % value if type_=='TXT' else value
                         }]
                     }
                 }]
             }
         )
-
-
-

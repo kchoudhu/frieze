@@ -1,11 +1,19 @@
 __all__ = [
-    'CertAuth',
+    'TrustType',
+    'CertAction',
+    'CertAuthInternal',
+    'CertAuthLetsEncrypt',
     'CertFormat',
     'ExtDNS'
 ]
 
+import acme.challenges, acme.client, acme.errors, acme.messages, acme.crypto_util
+import base64
 import datetime
 import enum
+import hashlib
+import josepy
+import json
 import openarc.env
 import openarc.exception
 import os
@@ -44,18 +52,325 @@ class CertFormat(enum.Enum):
     SSH = 1
     PEM = 2
 
-class CertAuth(object):
-    def __init__(self, domain):
+class CertAction(enum.Enum):
+    HOST_ACCESS_USER = 'user host access'
+    HOST_ACCESS_AUTO = 'auto host access'
+    REMOTE_ACCESS    = 'secure remote access'
+    IDENTITY         = 'identity'
 
+    def desc(self, info=None):
+        return f'{self.value}: {info}' if info else f'{self.value}'
+
+class TrustType(enum.Enum):
+    INTERNAL    = 'internal'
+    LETSENCRYPT = 'letsencrypt'
+
+class Certificate(object):
+    def __init__(self, authority, subjects):
+        self.authority = authority
+        self.primary_subject = None
+        self.subjects  = []
+        for subject in subjects:
+            ns_subject = subject.strip()
+            if not self.primary_subject:
+                self.primary_subject = ns_subject
+            self.subjects.append(ns_subject)
+            self.subjects.sort()
+        self.csr = None
+
+    @property
+    def chain(self):
+        """Return a pyca/cryptography object representing an issued certificate"""
+        try:
+            with open(self.files['chain'], 'rb') as f:
+                return f.read().decode('utf-8')
+        except:
+            return None
+
+    def create_csr(self, random_alt_subject=False, force=False):
+        """Use pyca/cryptography to create CSR object"""
+        if not force and self.is_valid:
+            print("This certificate is already issued and valid, not issuing CSR")
+            return
+
+        subject_key =\
+            rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=openarc.env.getenv('frieze').acme['keylen'],
+                backend=default_backend(),
+            )
+
+        subject_key_pem =\
+            subject_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption()
+            )
+
+        # Use pyca/cryptography to generate csr
+        subjects = list(self.subjects)
+        if random_alt_subject:
+            random_domain = base64.b16encode(os.urandom(5)).decode('utf-8')
+            random_domain = f'{random_domain}.{self.authority.domain.domain}'.lower()
+            subjects.append(random_domain)
+
+        csr =\
+            x509.CertificateSigningRequestBuilder(
+            ).subject_name(
+                x509.Name([
+                    x509.NameAttribute(NameOID.COMMON_NAME, self.primary_subject),
+                ])
+            ).add_extension(
+                x509.SubjectAlternativeName(
+                    [x509.DNSName(subject) for subject in subjects]
+                ),
+                critical=False,
+            ).sign(subject_key, hashes.SHA256(), default_backend())
+
+        if not os.path.exists(self.path()):
+            os.makedirs(self.path(), mode=0o700)
+        os.chmod(self.path(), 0o700)
+
+        with open(os.open(self.files['private'], os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
+            f.write(subject_key_pem)
+
+        return (csr.public_bytes(serialization.Encoding.PEM), subjects)
+
+    @property
+    def files(self):
+        return {
+            'chain'   : os.path.join(self.path(), 'chain.crt'),
+            'private' : os.path.join(self.path(), 'private.pem'),
+        }
+
+    @property
+    def inferred_name(self):
+        return hashlib.sha256(','.join(self.subjects).encode('utf-8')).hexdigest()
+
+    @property
+    def is_valid(self):
+        # Do the path validation thing
+        return (
+            os.path.exists(self.files['chain'])
+            and os.path.exists(self.files['private'])
+        )
+
+    def path(self, rootdir=None):
+        # The same certificate *may* map to multiple aliases. We need a way to reproducibly
+        # go from aliases -> on-disk directory.
+        if not rootdir:
+            rootdir = self.authority.certdir
+        return os.path.join(rootdir, self.inferred_name)
+
+    @property
+    def private_key(self):
+        """Return bytes of the private key used to sign the certificate"""
+        try:
+            with open(self.files['private'], 'rb') as f:
+                return f.read().decode('utf-8')
+        except:
+            return None
+
+class CertAuthBase(object):
+    def __init__(self, domain):
         self.domain = domain
         if not os.path.exists(self.root):
             os.makedirs(self.root, mode=0o700)
         os.chmod(self.root, 0o700)
 
+    def issue_certificate(self, *args, cert_format=CertFormat.SSH, **kwargs):
+        """By default, return SSH formatted certificates."""
+        return {
+            CertFormat.SSH : self._issue_ssh_certificate,
+            CertFormat.PEM : self._issue_pem_certificate,
+        }[cert_format](*args, **kwargs)
+
+    @property
+    def certdir(self):
+        return os.path.join(self.root, 'certs')
+
+    @property
+    def root(self):
+        return os.path.join(openarc.env.getenv('frieze').runprops.home, 'domains', self.domain.domain, 'trust', self.trust_type.value)
+
+class CertAuthLetsEncrypt(CertAuthBase):
+
+    trust_type = TrustType.LETSENCRYPT
+
+    def __init__(self, domain):
+        super().__init__(domain)
+        self.acme_account_key_file  = os.path.join(self.root, 'account.jwk')
+        self.acme_registration_file = os.path.join(self.root, 'registration.jwk')
+
+        from ...provider import CloudProvider
+        self.dns_provider = CloudProvider[openarc.env.getenv('frieze').extdns['provider'].upper()]
+
+    @property
+    def is_valid(self):
+        return os.path.exists(self.acme_account_key_file)
+
+    def __challenge_select(self, orderr, type_=acme.challenges.DNS01):
+        """Loop through available challenges and return the one that matches
+        type_ in dict (not json) form."""
+        cbodies = {}
+        authz_list = orderr.authorizations
+        for authz in authz_list:
+            cbodies[authz.body.identifier.value] = {}
+            for i in authz.body.challenges:
+                # Find the supported challenge.
+                if isinstance(i.chall, type_):
+                    response, validation = i.chall.response_and_validation(self.acme_client.net.key)
+                    cbodies[authz.body.identifier.value] = {
+                        'chall'      : i,
+                        'response'   : response,
+                        'validation' : validation
+                    }
+
+        return cbodies
+
+    def _issue_pem_certificate(self, subject, command, remote_user='root', user_ip=None, validity_length=120, valid_src_ips=None, serialize_to_dir=None):
+
+        if type(subject)!=list:
+            subject = [subject]
+
+        cert = Certificate(self, subject)
+        if cert.is_valid:
+            print(f"Valid certificate found for {subject}, not re-issuing")
+        else:
+            random_alt_subject = False
+            try:
+                (csr, csr_subjects) = cert.create_csr()
+                orderr = self.acme_client.new_order(csr)
+            except acme.messages.Error as e:
+                # work around rate limits...
+                print(e)
+                (csr, csr_subjects) = cert.create_csr(random_alt_subject=True)
+                orderr = self.acme_client.new_order(csr)
+
+            cbodies = self.__challenge_select(orderr)
+
+            # Create DNS txt record
+            extcloud = ExtCloud(self.dns_provider)
+            extzone = extcloud.dns_list_zones(name=self.domain.domain)[0]
+            for subject, cbody in cbodies.items():
+                print(f"[{subject}] Creating DNS validation TXT [{cbody['validation']}]")
+                zone = extcloud.dns_upsert_record(extzone['vsubid'], f'_acme-challenge.{subject}', cbody['validation'], ttl=5, type_='TXT')
+            del(extcloud)
+
+            print(f"Waiting 60 seconds for DNS propagation")
+            time.sleep(60)
+
+            def loop_verification(trycount):
+                acme_client = self.acme_client
+                print(f'[try {trycount}] Answering challenges')
+                for subject, cbody in cbodies.items():
+                    print(f'  Processing: {subject}')
+                    acme_client.answer_challenge(cbody['chall'], cbody['response'])
+
+                print(f'Finalizing certificate')
+                finalized_orderr = acme_client.poll_and_finalize(orderr)
+
+                print(f'Writing out to disk')
+                with open(os.open(cert.files['chain'], os.O_CREAT|os.O_WRONLY, 0o600), 'wb') as f:
+                    f.write(finalized_orderr.fullchain_pem.encode())
+
+            try:
+                loop_verification(1)
+            except acme.errors.TimeoutError:
+                loop_verification(2)
+
+        return cert
+
+    def _issue_ssh_certificate(self, subject, command, remote_user='root', user_ip=None, validity_length=120, valid_src_ips=None, serialize_to_dir=None):
+        raise OAError(f"You can't issue SSH certificates with [{self.trust_type.value} authority")
+
+    def __get_acme_client(self, key):
+
+        clargs = {
+            'account' : self.acme_registration,
+            'user_agent' : openarc.env.getenv('frieze').acme['useragent']
+        }
+
+        net = acme.client.ClientNetwork(key, **clargs)
+        directory =\
+            acme.messages.Directory.from_json(
+                net.get(self.acme_url).json()
+            )
+        return acme.client.ClientV2(directory, net=net)
+
+    @property
+    def acme_account_key(self):
+        """Return a fully validated ACME account credential in JWK format. If not found on
+        disk, create and validate one with the ACME authority"""
+        if not self.is_valid:
+            print(f"Creating account for [{self.trust_type.value}]")
+            account_privkey =\
+                josepy.JWKRSA(key=rsa.generate_private_key(
+                    public_exponent=65537,
+                    key_size=2048,
+                    backend=default_backend(),
+                ))
+
+            acme_client = self.__get_acme_client(account_privkey)
+            regr = acme_client.new_account(
+                acme.messages.NewRegistration.from_data(
+                    email=self.domain.contact,
+                    terms_of_service_agreed=True,
+                )
+            )
+
+            # Write registration file
+            with open(os.open(self.acme_registration_file, os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
+                f.write(regr.json_dumps())
+
+            # And store the key in JWK form
+            with open(os.open(self.acme_account_key_file, os.O_CREAT|os.O_WRONLY, 0o600), 'w') as f:
+                f.write(account_privkey.json_dumps())
+
+        with open(self.acme_account_key_file, 'r') as f:
+            account_privkey = josepy.JWKRSA.json_loads(f.read())
+
+        return account_privkey
+
+    @property
+    def acme_registration(self):
+        try:
+            with open(self.acme_registration_file, 'r') as f:
+                return acme.messages.RegistrationResource.json_loads(f.read())
+        except:
+            return None
+
+    @property
+    def acme_client(self):
+        return self.__get_acme_client(self.acme_account_key)
+
+    @property
+    def acme_url(self):
+        return {
+            'prod'    : 'https://acme-v02.api.letsencrypt.org/directory',
+            'staging' : 'https://acme-staging-v02.api.letsencrypt.org/directory'
+        }[openarc.env.getenv('frieze').acme['env']]
+
+    @property
+    def root(self):
+        return os.path.join(super().root, openarc.env.getenv('frieze').acme['env'])
+
+class CertAuthInternal(CertAuthBase):
+
+    trust_type = TrustType.INTERNAL
+
+    def __init__(self, domain):
+
+        super().__init__(domain)
+
         self.pw_file       = os.path.join(self.root, 'ca.pw')
         self.priv_key_file = os.path.join(self.root, 'ca.pem')
         self.pub_crt_file  = os.path.join(self.root, 'ca_pub.crt')
         self.pub_ssh_file  = os.path.join(self.root, 'ca_pub.ssh')
+
+    @property
+    def certificate_rootdir(self):
+        return os.path.join(self.trust_rootdir, 'certs')
 
     def certificate(self, certformat=CertFormat.PEM):
         if certformat == CertFormat.PEM:
@@ -65,16 +380,21 @@ class CertAuth(object):
             with open(self.pub_ssh_file, 'r') as f:
                 return f.read()
 
-    def distribute(self):
+    def distribute_authority(self):
         # Publish our certificate authority in SSH form.
         for site in self.domain.site:
             extcloud = ExtCloud(site.provider)
             for key in extcloud.sshkey_list():
                 extcloud.sshkey_destroy(key)
-            extcloud.sshkey_create(self.name, self.certificate(certformat=CertFormat.SSH))
+            extcloud.sshkey_create(self.domain.domain, self.certificate(certformat=CertFormat.SSH))
         return extcloud.sshkey_list()[0]
 
-    def generate(self):
+    def initialize(self):
+
+        # Not bothering with refreshing
+        if self.is_valid:
+            print(f"Not refreshing backend trust [{self.trust_type.value}]")
+            return
 
         # Generate a private key off the bat
         newca_priv_key =\
@@ -188,21 +508,20 @@ class CertAuth(object):
     def is_valid(self):
         """For now, just check the existence of these files to make sure that
         the CA looks to be in good shape"""
-        if os.path.exists(self.root):
-            if os.path.exists(self.pw_file)\
-                and os.path.exists(self.priv_key_file)\
-                and os.path.exists(self.pub_crt_file)\
-                and os.path.exists(self.pub_ssh_file):
-                return True
-            else:
-                return False
-        else:
-            return False
+        return (
+            os.path.exists(self.pw_file)
+            and os.path.exists(self.priv_key_file)
+            and os.path.exists(self.pub_crt_file)
+            and os.path.exists(self.pub_ssh_file)
+        )
 
-    def issue_ssh_certificate(self, user, command, remote_user='root', user_ip=None, validity_length=120, valid_src_ips=None, serialize_to_dir=None):
+    def _issue_pem_certificate(self, subject, command, remote_user='root', user_ip=None, validity_length=120, valid_src_ips=None, serialize_to_dir=None):
+        raise NotImplementedError("No implementation yet")
+
+    def _issue_ssh_certificate(self, subject, command, remote_user='root', user_ip=None, validity_length=120, valid_src_ips=None, serialize_to_dir=None):
 
         ### Generate new key to be SSH signed
-        user_private_key =\
+        subject_private_key =\
             rsa.generate_private_key(
                 public_exponent=65537,
                 key_size=2048,
@@ -221,9 +540,9 @@ class CertAuth(object):
 
         # Build up call
         event = {
-            'bastion_user'       : user,
+            'bastion_user'       : subject,
             'command'            : command,
-            'public_key_to_sign' : user_private_key\
+            'public_key_to_sign' : subject_private_key\
                                     .public_key()\
                                     .public_bytes(
                                         encoding=serialization.Encoding.OpenSSH,
@@ -240,6 +559,7 @@ class CertAuth(object):
             request =\
                 schema.load(event).data
         except ValidationError as e:
+            print(e)
             raise openarc.exception.OAError("Unable to validate schema for ssh key generation request")
 
         current_time = OATime().now
@@ -283,7 +603,7 @@ class CertAuth(object):
 
         # Return signed credential, or output it to a directory
         serialized_cert    = cert
-        serialized_privkey = user_private_key.private_bytes(
+        serialized_privkey = subject_private_key.private_bytes(
                                  encoding=serialization.Encoding.PEM,
                                  format=serialization.PrivateFormat.PKCS8,
                                  encryption_algorithm=serialization.NoEncryption()
@@ -308,10 +628,6 @@ class CertAuth(object):
             return (serialized_cert, serialized_privkey)
 
     @property
-    def name(self):
-        return "%s" % self.domain.domain
-
-    @property
     def private_key_password(self):
         with open(self.pw_file, 'r') as f:
             return f.read().encode()
@@ -321,10 +637,6 @@ class CertAuth(object):
         with open(self.priv_key_file, 'rb') as f:
             priv_key = f.read()
         return priv_key
-
-    @property
-    def root(self):
-        return os.path.join(openarc.env.getenv('frieze').runprops.home, 'domains', self.domain.domain, 'ca')
 
     @property
     def rootca_cert(self):
@@ -373,7 +685,7 @@ class ExtDNS(object):
             bastion_ip = site.bastion.ip4(fib=FIB.WORLD)
             for cap in site.capability_expose:
                 for ca in cap.capability_alias:
-                    needed[ca.alias] = bastion_ip
+                    needed[ca.fqdn] = bastion_ip
 
         # Initialize provider
         extcloud = ExtCloud(self.provider)
@@ -392,4 +704,4 @@ class ExtDNS(object):
             except KeyError:
                 print(f"Creating new record for alias [{alias}]: {expected_ip}")
 
-            extcloud.dns_upsert_record(extzone['vsubid'], self.domain, alias, expected_ip)
+            extcloud.dns_upsert_record(extzone['vsubid'], alias, expected_ip)

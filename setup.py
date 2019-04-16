@@ -19,6 +19,7 @@ setup(name='frieze',
       install_requires=[
         'bless',
         'boto3',
+        'certbot',
         'cryptography',
         'mako',
         'openarc',
