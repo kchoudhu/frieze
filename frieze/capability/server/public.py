@@ -518,7 +518,7 @@ class CertAuthInternal(CertAuthBase):
     def _issue_pem_certificate(self, subject, command, remote_user='root', user_ip=None, validity_length=120, valid_src_ips=None, serialize_to_dir=None):
         raise NotImplementedError("No implementation yet")
 
-    def _issue_ssh_certificate(self, subject, command, remote_user='root', user_ip=None, validity_length=120, valid_src_ips=None, serialize_to_dir=None):
+    def _issue_ssh_certificate(self, subject, command, remote_user='root', user_ip=None, validity_length=300, valid_src_ips=None, serialize_to_dir=None):
 
         ### Generate new key to be SSH signed
         subject_private_key =\
