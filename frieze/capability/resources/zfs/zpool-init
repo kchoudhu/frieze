@@ -1,4 +1,4 @@
-zpool import -a
+zpool import -af
 
 if [ ! "`zpool list | egrep ${blockstore.zpool}`" ]; then
     zpool create ${blockstore.zpool} ${blockstore.sysname}
