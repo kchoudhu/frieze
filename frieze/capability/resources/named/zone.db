@@ -14,4 +14,7 @@ ${'%-30s' % '@'} IN  NS  ns1.
 ${'%-30s' % 'ns1'} IN  A   ${host.ip4()}
 % for zcru in zonecontainer.rununits:
 ${'%-30s'% zcru.name} IN  A   ${zcru.ip4()}
+% if zcru.stripe_group:
+${'%-30s'% zcru.stripe_group} IN  A   ${zcru.ip4()}
+% endif
 % endfor

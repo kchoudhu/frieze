@@ -13,6 +13,7 @@ __all__ = [
     'named',
     'openssh',
     'pf',
+    'pflate',
     'pflog',
     'resolvconf',
     'sshd',
@@ -256,7 +257,7 @@ class named(CapabilityTemplate):
         for deployment in host.site.domain.deployment:
             filename = "/usr/local/etc/namedb/dynamic/%s.db" % deployment.zone
             zones[deployment.zone] = filename
-            rv[filename] = mako.template.Template(zone_template).render(zonecontainer=deployment, forward=True, host=host)
+            rv[filename] = mako.template.Template(zone_template).render(zonecontainer=deployment, host=host)
 
             for container in deployment.containers:
                 try:
@@ -281,6 +282,8 @@ class named(CapabilityTemplate):
         return {**rv, **super().generate_cfg_files(host, __exclude__=['zone.db', 'revzone.db', 'named.conf.local'])}
 
 class pf(CapabilityTemplate): pass
+
+class pflate(CapabilityTemplate): pass
 
 class pflog(CapabilityTemplate): pass
 

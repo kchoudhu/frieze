@@ -121,8 +121,11 @@ class TestSubscriptions(unittest.TestCase, TestBase):
             # Capabilities can be added to deployments using a chain of add_capability calls.
             #
             # stripes:        number of stripes of the capability need to be added.
-            # max_stripes:    number of stripes of the capability the deployment can hold. If
-            #                 specified, can override stripes parameter.
+            # stripe_group:   requests to a stripe group will distributed round-robin, among the
+            #                 capability stripes assigned to group.
+            # max_stripes:    number of stripes of the capability the that can be held in a
+            #                 stripe_group. A stripe_group of None implies that max_stripes applies
+            #                 to the deployment.
             # expose:         capability can be accessed via egress site bastion. If there is
             #                 more than one stripe, sitebastion will loadbalance between all known
             #                 stripes
@@ -140,6 +143,7 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                 ).add_capability(
                     frieze.capability.nginx(),
                     stripes=2,
+                    stripe_group='www',
                     max_stripes=2,
                     expose=site,
                     secure=True,

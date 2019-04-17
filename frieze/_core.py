@@ -42,7 +42,7 @@ from frieze.provider import CloudProvider, ExtCloud, Location
 from frieze.capability import\
     ConfigGenFreeBSD, ConfigInit, CapabilityTemplate,\
     dhclient as dhc, bird, dhcpd, firstboot, gateway, jail,\
-    named, pf, pflog, resolvconf, zfs
+    named, pf, pflog, pflate, resolvconf, zfs
 from frieze.capability.server import\
     TrustType, CertAction, CertAuthInternal, CertAuthLetsEncrypt, ExtDNS
 
@@ -209,6 +209,8 @@ class OAG_Capability(OAG_FriezeRoot):
     def dbindices(cls): return {
         'host_capname' : [ ['host',       'service'], False, None ],
         'depl_capname' : [ ['deployment', 'service'], False, None ],
+        'depl_strpgroup_capname'
+                       : [ ['deployment', 'service', 'stripe_group'], False, None ],
     }
 
     @staticproperty
@@ -216,21 +218,22 @@ class OAG_Capability(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'deployment' : [ OAG_Deployment, False, None ],
-        'affinity'   : [ OAG_Site,       False, None ],
-        'host'       : [ OAG_Host,       False, None ],
-        'service'    : [ 'text',         str(), None ],
-        'stripe'     : [ 'int',          int(), None ],
-        'cores'      : [ 'float',        int(), None ],
-        'memory'     : [ 'int',          int(), None ],
-        'start_rc'   : [ 'bool',         None,  None ],
-        'start_local': [ 'bool',         False, None ],
+        'deployment'   : [ OAG_Deployment, False, None ],
+        'affinity'     : [ OAG_Site,       False, None ],
+        'host'         : [ OAG_Host,       False, None ],
+        'service'      : [ 'text',         str(), None ],
+        'stripe'       : [ 'int',          int(), None ],
+        'stripe_group' : [ 'text',         True,  None ],
+        'cores'        : [ 'float',        int(), None ],
+        'memory'       : [ 'int',          int(), None ],
+        'start_rc'     : [ 'bool',         None,  None ],
+        'start_local'  : [ 'bool',         False, None ],
         'start_local_prms':
-                       [ 'text',         None,  None ],
-        'fib'        : [ FIB,            True,  None ],
-        'expose'     : [ OAG_Site,       False, None ],
-        'secure'     : [ 'bool',         True,  None ],
-        'custom_pkg' : [ 'bool',         False, None ],
+                        [ 'text',         None,  None ],
+        'fib'          : [ FIB,            True,  None ],
+        'expose'       : [ OAG_Site,       False, None ],
+        'secure'       : [ 'bool',         True,  None ],
+        'custom_pkg'   : [ 'bool',         False, None ],
     }
 
     @property
@@ -259,6 +262,10 @@ class OAG_Capability(OAG_FriezeRoot):
             return self.capability_alias.fqdn
         else:
             return None
+
+    @property
+    def fqdn_stripe(self):
+        return f'{self.stripe_group}.{self.deployment.name}.{self.deployment.domain.domain}'
 
     @property
     def name(self):
@@ -426,6 +433,10 @@ class OAG_Container(OAG_FriezeRoot):
         return self.host.os
 
     @property
+    def stripe_group(self):
+        return self.capability.stripe_group
+
+    @property
     def sysname(self):
         return f'{self.deployment.name}_{self.capability.name}'
 
@@ -449,7 +460,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, max_stripes=None, expose=None, external_alias=[], secure=False, custom_pkg=False):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, stripe_group=None, max_stripes=None, expose=None, external_alias=[], secure=False, custom_pkg=False):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If capdef doesn't specify cores or memory required, just go ahead
@@ -464,14 +475,24 @@ class OAG_Deployment(OAG_FriezeRoot):
             if expose and not external_alias:
                 raise OAError(f"Exposed capability [{capdef.name}] *must* have external DNS alias")
 
+            stripe_group = capdef.name if not stripe_group else stripe_group
+
+            # Determine what the overall stripe count should be for this service,
+            # and further determine if we have created too many stripes for this
+            # stripe group
             try:
                 cap = OAG_Capability((self, capdef.name), 'by_depl_capname')
-                if max_stripes and cap.size>=max_stripes:
-                    print(f"====> [{self.name}] All necessary [{capdef.name}] stripes already running (max {max_stripes})")
-                    return self
                 stripe_base = cap[-1].stripe+1
-            except OAGraphRetrieveError:
+            except:
                 stripe_base = 0
+
+            try:
+                cap = OAG_Capability((self, capdef.name, stripe_group), 'by_depl_strpgroup_capname')
+                if max_stripes and cap.size>=max_stripes:
+                    print(f"====> [{self.name}] All necessary [{capdef.name}] stripes for stripe group [{stripe_group}] already running (max {max_stripes})")
+                    return self
+            except OAGraphRetrieveError:
+                pass
 
             with OADbTransaction("App Add"):
                 for stripe in range(stripes):
@@ -481,6 +502,7 @@ class OAG_Deployment(OAG_FriezeRoot):
                             'host' : None,
                             'service' : capdef.name,
                             'stripe' : stripe_base+stripe,
+                            'stripe_group' : stripe_group,
                             'affinity' : affinity,
                             'cores' : capdef.cores if capdef.cores else 0,
                             'memory' : capdef.memory if capdef.memory else 0,
@@ -905,6 +927,7 @@ class OAG_Host(OAG_FriezeRoot):
                             'host' : self,
                             'service' : capdef.name,
                             'stripe' : 0,
+                            'stripe_group' : capdef.name,
                             'affinity' : None,
                             'cores' : capdef.cores if capdef.cores else 0,
                             'memory' : capdef.memory if capdef.memory else 0,
@@ -1020,6 +1043,7 @@ class OAG_Host(OAG_FriezeRoot):
                         'host' : self,
                         'service' : dhc.name,
                         'stripe' : 0,
+                        'stripe_group' : dhc.name,
                         'affinity' : None,
                         'cores' : dhc.cores if dhc.cores else 0,
                         'memory' : dhc.memory if dhc.memory else 0,
@@ -1139,6 +1163,10 @@ class OAG_Host(OAG_FriezeRoot):
     @property
     def routed_subnets(self):
         return self.subnet.clone()
+
+    @property
+    def stripe_group(self):
+        return None
 
 class OAG_NetIface(OAG_FriezeRoot):
 
@@ -1381,6 +1409,8 @@ class OAG_Site(OAG_FriezeRoot):
             host.add_capability(gateway(), enable_state=True)
             host.add_capability(pf(), enable_state=True)
             host.add_capability(pflog(), enable_state=True)
+            if host.role==HostRole.SITEBASTION:
+                host.add_capability(pflate(), enable_state=True)
             host.add_capability(zfs(), enable_state=True)
             if host.role==HostRole.COMPUTE:
                 host.add_capability(jail(), enable_state=True)
@@ -1577,15 +1607,14 @@ class OAG_Site(OAG_FriezeRoot):
 
     @oagprop
     def expose_map(self, **kwargs):
-        expose_ips = {}
+        expose_map = {}
         for cap in self.capability_expose:
             for depl in self.domain.deployment:
                 for container in depl.containers:
                     if cap.fqdn==container.capability.fqdn:
                         for port in cap.c_capability.ports:
-                            expose_ips.setdefault(str(port), []).append(container.ip4())
-        print(expose_ips)
-        return expose_ips
+                            expose_map.setdefault(str(port), []).append(container.capability.fqdn_stripe)
+        return expose_map
 
 class OAG_Subnet(OAG_FriezeRoot):
     """Subnets are doled out on a per-domain basis and then assigned to

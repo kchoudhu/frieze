@@ -1,0 +1,21 @@
+>/usr/local/etc/rc.d/pflate 0555
+<%text>
+#!/bin/sh
+#
+# PROVIDE: pflate
+# REQUIRE: pf named
+
+. /etc/rc.subr
+
+name=pflate
+start_cmd="${name}_start"
+rcvar=${name}_enable
+
+pflate_start()
+{
+    /usr/sbin/service pf reload
+}
+
+load_rc_config $name
+run_rc_command "$1"
+</%text>\
