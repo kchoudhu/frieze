@@ -2,8 +2,3 @@
 <%import frieze%>\
 ${container.dataset(frieze.Container.DataLayer.BASE, mountpoint=True)} ${container.jaildir}/   nullfs  ro  0   0
 ${container.dataset(frieze.Container.DataLayer.THINJAIL, mountpoint=True)} ${container.jaildir}/skeleton nullfs rw  0   0
-% if container.block_storage:
-% for bs in container.block_storage:
-${bs.mount_point} ${container.jaildir}/skeleton/${bs.mount_point} nullfs   rw  0   0
-% endfor
-% endif

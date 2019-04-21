@@ -23,11 +23,17 @@ class HostTemplate(object):
         ('vtnet1', False)
     ]
     sysctls    = [
-        # Tunable------------------------boot-----------------value
+        # Tunable-------------------------------------boot-----------------value
         # Do not checksum on VTNET interfaces
-        (Tunable.HW_VTNET_CSUM__DISABLE, TunableType.BOOT,    "1"),
+        (Tunable.HW_VTNET_CSUM__DISABLE,              TunableType.BOOT,    "1"),
         # We need two routing tables (one for internal, one for external)
-        (Tunable.NET_FIBS,               TunableType.BOOT,    "2"),
+        (Tunable.NET_FIBS,                            TunableType.BOOT,    "2"),
+        # Allow ZFS inside jail
+        (Tunable.SECURITY_JAIL_MOUNT__ZFS__ALLOWED,   TunableType.RUNTIME, "1"),
+        # Allow devfs inside jail
+        (Tunable.SECURITY_JAIL_MOUNT__DEVFS__ALLOWED, TunableType.RUNTIME, "1"),
+        # Allow mounting inside jail
+        (Tunable.SECURITY_JAIL_MOUNT__ALLOWED,        TunableType.RUNTIME, "1"),
     ]
     caps       = [
         # cap------------------------enabled/disabled---external access

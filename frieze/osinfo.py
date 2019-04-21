@@ -39,14 +39,17 @@ class Tunable(enum.Enum):
     # machdep    10400-10799 (36)
     #            10800-10999 (reserved)
     # security   11000-11999 (82)
+    SECURITY_JAIL_MOUNT__ZFS__ALLOWED   = 11000
+    SECURITY_JAIL_MOUNT__DEVFS__ALLOWED = 11001
+    SECURITY_JAIL_MOUNT__ALLOWED        = 11002
     # vm         12000-12999 (226)
     # debug      13000-13999 (305)
     # hw         14000-14999 (354)
-    HW_VTNET_CSUM__DISABLE = 14000
+    HW_VTNET_CSUM__DISABLE              = 14000
     # vfs        15000-15999 (357)
     # net        16000-16999 (386)
-    NET_ADD__ADDR__ALLFIBS = 16000
-    NET_FIBS               = 16001
+    NET_ADD__ADDR__ALLFIBS              = 16000
+    NET_FIBS                            = 16001
     # kern       17000-18999 (1034)
     # kmods      19000-19999 (1000)
 
