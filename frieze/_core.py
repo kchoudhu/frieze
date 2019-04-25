@@ -516,6 +516,15 @@ class OAG_Deployment(OAG_FriezeRoot):
                             'custom_pkg' : custom_pkg,
                         })
 
+                    if capdef.setknobs_exist:
+                        for knob, value in capdef.set_knobs.items():
+                            knob =\
+                                OAG_CapabilityKnob().db.create({
+                                    'capability' : cap,
+                                    'knob' : knob,
+                                    'value' : value
+                                })
+
                     for alias in external_alias:
                         capalias =\
                             OAG_CapabilityAlias().db.create({

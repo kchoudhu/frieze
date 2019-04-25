@@ -2,5 +2,5 @@ zpool import -af
 
 if [ ! "`zpool list | egrep ${blockstore.zpool}`" ]; then
     zpool create ${blockstore.zpool} ${blockstore.sysname}
-    zfs set jailed=on ${blockstore.zpool}
 fi
+zfs set jailed=on ${blockstore.zpool}

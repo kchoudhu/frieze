@@ -54,7 +54,9 @@ class CapabilityTemplate(object):
     # Application can exist inside a jail
     jailable = True
 
-    # Package to install
+    # Package to install. If set to None, nothing is installed. If set and
+    # custom_pkg=False, a naive call to pkg install <package> is issued. If set
+    # and custom_pkg=True, pkg add <path/to/txz> is issued.
     package = None
 
     # Knobs used by job system to adjust the operation of this capability. Knobs

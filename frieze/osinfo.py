@@ -47,6 +47,7 @@ class Tunable(enum.Enum):
     # hw         14000-14999 (354)
     HW_VTNET_CSUM__DISABLE              = 14000
     # vfs        15000-15999 (357)
+    VFS_ZFS_TXG_TIMEOUT                 = 15000
     # net        16000-16999 (386)
     NET_ADD__ADDR__ALLFIBS              = 16000
     NET_FIBS                            = 16001

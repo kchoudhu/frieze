@@ -94,8 +94,9 @@ class ConfigGenFreeBSD(object):
             if capability.custom_pkg:
                 install_commands = [
                     f'yes | pkg delete {service.name}',
-                    f'yes | pkg install /root/{service.name}.txz',
-                    f'rm /root/{service.name}.txz',
+                    f'yes | pkg autoremove',
+                    f'yes | pkg install {service.package}',
+                    f'rm {service.package}',
                 ]
                 try:
                     rv[ConfigFile.POST_COMMAND_LIST].extend(install_commands)

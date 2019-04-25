@@ -34,6 +34,8 @@ class HostTemplate(object):
         (Tunable.SECURITY_JAIL_MOUNT__DEVFS__ALLOWED, TunableType.RUNTIME, "1"),
         # Allow mounting inside jail
         (Tunable.SECURITY_JAIL_MOUNT__ALLOWED,        TunableType.RUNTIME, "1"),
+        # Drop the transaction timeout to 1 second
+        (Tunable.VFS_ZFS_TXG_TIMEOUT,                 TunableType.RUNTIME, "1"),
     ]
     caps       = [
         # cap------------------------enabled/disabled---external access
