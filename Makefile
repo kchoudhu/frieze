@@ -9,7 +9,8 @@ HOME?=/usr/home/${USER}
 SRCDIR?=${HOME}/src
 
 # Python environment
-PIP?="pip-3.6"
+PIP?=pip-3.6
+PIP_OPTIONS=--global-option=build_ext --global-option="-I/usr/local/include/" --global-option="-L/usr/local/lib"
 DEVPI?="devpi"
 DEVPI-SERVER?="devpi-server"
 PYTHON?="python3"
@@ -43,10 +44,6 @@ pyinit: pyclean
 
 	# Make sure all packages have been uploaded
 	# Some helper tools
-	${PIP} install --no-cache-dir wheel devpi-server devpi-client --user
-
-	# Start DevPI (or check on its status)
-	-${DEVPI-SERVER} --start
 
 	# Upload locally developed packages
 	cd ${BLESS_PROJECT_DIR} && ${DEVPI} upload
@@ -54,7 +51,7 @@ pyinit: pyclean
 	cd ${VULTR_PROJECT_DIR} && ${DEVPI} upload
 	cd ${FRIEZE_PROJECT_DIR} && ${DEVPI} upload
 
-	${PIP} install --no-cache-dir ${FRIEZE_PYMODULE_NAME} --user
+	${PIP} install ${PIP_OPTIONS} --no-cache-dir ${FRIEZE_PYMODULE_NAME} --user
 
 push-bootstrap:
 	scp ./${PROJECT}/resources/firstboot/configinit\
