@@ -855,7 +855,7 @@ class OAG_Domain(OAG_FriezeRoot):
                 remote_tarfile = f'{host.fqdn}.tar.bz2'
                 cmd = f'ssh root@{remote_address} -i {id_file} "cat > {remote_tarfile} && configinit {remote_tarfile}"'
 
-                print(f'Pushing configuration for: {host.fqdn} ({remote_address}')
+                print(f'Pushing configuration for: {host.fqdn} ({remote_address})')
                 print(f'  {cmd}')
 
                 output =\
