@@ -98,6 +98,9 @@ class CapabilityTemplate(object):
                     rv[cfg_name] = mako.template.Template(cfg_raw.decode()).render(host=host)
                 except UnicodeDecodeError:
                     rv[cfg_name] = cfg_raw
+                except Exception as e:
+                    print(f"Error processing template [{cfg_name}] for capability [{self.name}]")
+                    raise
         except FileNotFoundError:
             pass
         return rv
