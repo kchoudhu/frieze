@@ -357,6 +357,19 @@ class OAG_CapabilityRequiredMount(OAG_FriezeRoot):
         'size_gb' : [ 'int',           True, None ],
     }
 
+class OAG_CapabilityRole(OAG_FriezeRoot):
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'capability'  : [ OAG_Capability, True, None ],
+        'role'        : [ OAG_Role,       True, None ]
+    }
+
 class OAG_Container(OAG_FriezeRoot):
 
     class DataLayer(enum.Enum):
@@ -460,7 +473,7 @@ class OAG_Deployment(OAG_FriezeRoot):
     }
 
     @friezetxn
-    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, stripe_group=None, max_stripes=None, expose=None, external_alias=[], secure=False, custom_pkg=False):
+    def add_capability(self, capdef, enable_state=True, affinity=None, stripes=1, stripe_group=None, max_stripes=None, expose=None, external_alias=[], secure=False, custom_pkg=False, acls=[]):
         """ Where should we put this new capability? Loop through all
         hosts in site and see who has slots open. One slot=1 cpu + 1GB RAM.
         If capdef doesn't specify cores or memory required, just go ahead
@@ -531,6 +544,13 @@ class OAG_Deployment(OAG_FriezeRoot):
                                 'capability' : cap,
                                 'alias' : alias,
                                 'is_external' : True
+                            })
+
+                    for acl in set(acls):
+                        caprole =\
+                            OAG_CapabilityRole().db.create({
+                                'capability' : cap,
+                                'role'       : OAG_Role((self.domain, acl), 'by_name')[-1]
                             })
 
                     for (mount, size_gb) in capdef.mounts:
@@ -619,6 +639,21 @@ class OAG_Domain(OAG_FriezeRoot):
                     host.add_iface(depl.vlan, False, hostiface=host.internal_ifaces[0], type_=NetifType.VLAN, deployment=depl)
 
         return depl
+
+    @friezetxn
+    def add_role(self, username, password=None, ssl_enabled=False):
+        try:
+            role = OAG_Role((self, 'username'), 'by_name')
+        except OAGraphRetrieveError:
+            if not password:
+                password=base64.b16encode(os.urandom(16)).decode('ascii')
+            role =\
+                OAG_Role().db.create({
+                    'domain'   : self,
+                    'username' : username,
+                    'password' : password
+                })
+        return self
 
     @friezetxn
     def add_site(self, sitename, shortname, provider, location):
@@ -1356,6 +1391,26 @@ class OAG_NetIface(OAG_FriezeRoot):
             self.ip4,
             self.gateway,
             self.broadcast))
+
+class OAG_Role(OAG_FriezeRoot):
+
+    @staticproperty
+    def context(cls): return "frieze"
+
+    @staticproperty
+    def dbindices(cls): return {
+        'name'        : [ ['domain', 'username'], True, None ],
+    }
+
+    @staticproperty
+    def streamable(self): return True
+
+    @staticproperty
+    def streams(cls): return {
+        'domain'      : [ OAG_Domain,   True,  None ],
+        'username'    : [ 'text',       True,  None ],
+        'password'    : [ 'text',       True,  None ],
+    }
 
 class OAG_Site(OAG_FriezeRoot):
     @staticproperty

@@ -114,9 +114,13 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                     'role'      : frieze.HostRole.COMPUTE
                 })
 
-            print("===> Add deployment: infra")
-            infra_depl = domain.add_deployment("infra", affinity=site)
+            # Add in domain identities. add_identity() will create a password if one is not given.
+            domain\
+                .add_role('openrelay_rw')\
+                .add_role('openrelay_ro')
 
+            print("===> Add deployment: app")
+            infra_depl = domain.add_deployment("app", affinity=site)
 
             # Capabilities can be added to deployments using a chain of add_capability calls.
             #
@@ -131,6 +135,11 @@ class TestSubscriptions(unittest.TestCase, TestBase):
             #                 stripes
             # external_alias: required if expose parameter is set, list of domain aliases to be
             #                 set in external DNS manager
+            # acl:            defaults to [], i.e. anyone can access this service. If set, credentials
+            #                 in the list are presented for authentication to the capability. Note that
+            #                 frieze can make the credentials available to the capability in a standardized
+            #                 fashion, but the underlying software *must* be set to present and
+            #                 authenticate them.
             print("===> Add deployment capabilities")
             infra_depl\
                 .add_capability(
@@ -138,10 +147,13 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                     max_stripes=1,
                     custom_pkg=True
                 ).add_capability(
-                    frieze.capability.postgres(),
-                    max_stripes=1
+                    frieze.capability.openrelaydb()\
+                        .setknob('appname', 'openrelay'),
+                    max_stripes=1,
+                    custom_pkg=True,
+                    acls=['openrelay_rw', 'openrelay_ro']
                 ).add_capability(
-                    frieze.capability.nginx(),
+                    frieze.capability.openrelaystatic(),
                     stripes=2,
                     stripe_group='www',
                     max_stripes=2,
@@ -150,17 +162,11 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                     external_alias=['', 'www']
                 )
 
-            print("===> Add deployment: app")
-            app_depl = domain.add_deployment("app", affinity=site)
-
-            print("===> Add deployment capabilities")
-            app_depl.add_capability(frieze.capability.nginx(), stripes=1, max_stripes=2)
-
             print("===> Snapshot domain")
             snap = domain.snapshot(f"QA deployment {snapcount}")
 
             print("===> Deploy snapshot")
-            snap.deploy(push=True)
+            snap.deploy(push=False)
 
             return site
 
