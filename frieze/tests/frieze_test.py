@@ -115,6 +115,7 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                 })
 
             # Add in domain identities. add_identity() will create a password if one is not given.
+            print("===> Add users")
             domain\
                 .add_role('openrelay_rw')\
                 .add_role('openrelay_ro')
@@ -151,7 +152,10 @@ class TestSubscriptions(unittest.TestCase, TestBase):
                         .setknob('appname', 'openrelay'),
                     max_stripes=1,
                     custom_pkg=True,
-                    acls=['openrelay_rw', 'openrelay_ro']
+                    acls=[
+                        ('openrelay_rw', frieze.RoleACL.RW),
+                        ('openrelay_ro', frieze.RoleACL.R)
+                    ]
                 ).add_capability(
                     frieze.capability.openrelaystatic(),
                     stripes=2,
@@ -166,7 +170,7 @@ class TestSubscriptions(unittest.TestCase, TestBase):
             snap = domain.snapshot(f"QA deployment {snapcount}")
 
             print("===> Deploy snapshot")
-            snap.deploy(push=False)
+            snap.deploy(push=True)
 
             return site
 

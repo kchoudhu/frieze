@@ -8,6 +8,7 @@ __all__ = [
     'FIB', 'Netif', 'NetifType', 'SubnetType',
     'Deployment',
     'Container',
+    'RoleACL',
     'set_domain'
 ]
 
@@ -63,6 +64,25 @@ class NetifType(enum.Enum):
     OVPN_CLIENT = 3
     VLAN        = 4
     BRIDGE      = 5
+
+class RoleACL(enum.Enum):
+    NONE = 0
+    X    = 1
+    W    = 2
+    WX   = 3
+    R    = 4
+    RX   = 5
+    RW   = 6
+    RWX  = 7
+
+    @property
+    def can_exec(self): return bool(self.value&self.X.value)
+
+    @property
+    def can_read(self): return bool(self.value&self.R.value)
+
+    @property
+    def can_write(self): return bool(self.value&self.W.value)
 
 class RoutingStyle(enum.Enum):
     DHCP        = 1
@@ -189,6 +209,10 @@ class OAG_FriezeRoot(OAG_RootNode):
                         if cap.capability_alias:
                             for ca in cap.capability_alias:
                                 n_ca = self.db_clone_with_changes(ca)
+
+                        if cap.capability_role:
+                            for cr in cap.capability_role:
+                                n_cr = self.db_clone_with_changes(cr)
 
             for subnet in self.root_domain.subnet:
                 n_subnet = self.db_clone_with_changes(subnet)
@@ -367,8 +391,15 @@ class OAG_CapabilityRole(OAG_FriezeRoot):
     @staticproperty
     def streams(cls): return {
         'capability'  : [ OAG_Capability, True, None ],
-        'role'        : [ OAG_Role,       True, None ]
+        'role'        : [ OAG_Role,       True, None ],
+        'acl'         : [ RoleACL,        True, None ],
     }
+
+    def __getitem__(self, indexinfo, preserve_cache=False):
+        if type(indexinfo)==str:
+            return self.clone().rdf.filter(lambda x: x.role.username==indexinfo).role
+        else:
+            return super().__getitem__(indexinfo, preserve_cache=preserve_cache)
 
 class OAG_Container(OAG_FriezeRoot):
 
@@ -550,7 +581,8 @@ class OAG_Deployment(OAG_FriezeRoot):
                         caprole =\
                             OAG_CapabilityRole().db.create({
                                 'capability' : cap,
-                                'role'       : OAG_Role((self.domain, acl), 'by_name')[-1]
+                                'role'       : OAG_Role((self.domain, acl[0]), 'by_name')[-1],
+                                'acl'        : acl[1],
                             })
 
                     for (mount, size_gb) in capdef.mounts:
@@ -576,6 +608,19 @@ class OAG_Deployment(OAG_FriezeRoot):
     @property
     def rununits(self):
         return self.containers
+
+    @property
+    def stripe_groups(self):
+        """Returns dict containing stripe_group:capability"""
+        rv = {}
+
+        for cap in self.capability:
+            try:
+                rv[cap.stripe_group]
+            except KeyError:
+                rv[cap.stripe_group] = self.capability.clone().rdf.filter(lambda x: x.stripe_group==cap.stripe_group)[0]
+
+        return rv
 
     @property
     def vlan(self):
@@ -643,8 +688,10 @@ class OAG_Domain(OAG_FriezeRoot):
     @friezetxn
     def add_role(self, username, password=None, ssl_enabled=False):
         try:
-            role = OAG_Role((self, 'username'), 'by_name')
+            role = OAG_Role((self, username), 'by_name')
+            print(f"====> Found previously generated entry for user [{username}]")
         except OAGraphRetrieveError:
+            print(f"====> Creating new entry for [{username}]")
             if not password:
                 password=base64.b16encode(os.urandom(16)).decode('ascii')
             role =\
