@@ -397,7 +397,9 @@ class OAG_CapabilityRole(OAG_FriezeRoot):
 
     def __getitem__(self, indexinfo, preserve_cache=False):
         if type(indexinfo)==str:
-            return self.clone().rdf.filter(lambda x: x.role.username==indexinfo).role
+            def λ(x):
+                return x.role.username==indexinfo
+            return self.rdf.filter(λ).role
         else:
             return super().__getitem__(indexinfo, preserve_cache=preserve_cache)
 
@@ -1841,7 +1843,7 @@ class OAG_SysMount(OAG_FriezeRoot):
 
     @property
     def zpool(self):
-        return f'{self.capmnt.cap.service}{self.capmnt.cap.stripe}_{self.capmnt.mount}'
+        return f'{self.capmnt.cap.service}{self.capmnt.cap.stripe}_{self.capmnt.cap.deployment.name}_{self.capmnt.mount}'
 
 ####### Exportable friendly names go here
 
