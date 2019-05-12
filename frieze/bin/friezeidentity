@@ -6,24 +6,30 @@ import getpass
 
 def main(args):
 
+    # User
     user = getpass.getuser()
 
-    domain = frieze.set_domain(args.domain, args.organization)
+    # Parse out domain, find frieze entry
+    r_domain = '.'.join(args.host.split('.')[-2:])
+    n_domain = frieze.Domain(r_domain, 'by_domain').root_domain
+    domain = frieze.set_domain(n_domain.domain, n_domain.org)
 
-    domain.certauthority.issue_ssh_certificate(
-        user,
-       'server access',
-        remote_user='root',
-        serialize_to_dir='~/.ssh'
-    )
-
-    print("Issued certificate to [%s] for [%s]" % (user, args.domain))
-
+    for site in domain.site:
+        host = site.host.rdf.filter(lambda x: x.fqdn==args.host)
+        if host.size>0:
+            keypair = domain.trust().issue_certificate(
+                user,
+               'server access',
+                remote_user='root',
+                serialize_to_dir='~/.ssh'
+            )
+            print(f"ssh root@{host.c_ip4} -i {keypair[1]}")
+            break
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Issue an ephemeral SSH key to current user')
-    parser.add_argument('-d', dest='domain', help='domain for which credentials are being requested')
+    parser.add_argument('-d', dest='host', help='domain w are attempting to connect to')
     parser.add_argument('-o', dest='organization', help='organization within domain')
 
     main(parser.parse_args())
