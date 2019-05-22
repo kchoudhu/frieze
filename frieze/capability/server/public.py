@@ -14,7 +14,6 @@ import enum
 import hashlib
 import josepy
 import json
-import openarc.env
 import openarc.exception
 import os
 import pprint
@@ -44,7 +43,8 @@ from bless.ssh.certificates.ssh_certificate_builder import SSHCertificateType
 from bless.ssh.certificates.ssh_certificate_builder_factory import get_ssh_certificate_builder
 from marshmallow.exceptions import ValidationError
 
-from openarc.oatime import OATime
+from openarc      import *
+from openarc.time import OATime
 
 from frieze.provider import ExtCloud
 
@@ -96,7 +96,7 @@ class Certificate(object):
         subject_key =\
             rsa.generate_private_key(
                 public_exponent=65537,
-                key_size=openarc.env.getenv('frieze').acme['keylen'],
+                key_size=oaenv('frieze').acme.keylen,
                 backend=default_backend(),
             )
 
@@ -191,7 +191,7 @@ class CertAuthBase(object):
 
     @property
     def root(self):
-        return os.path.join(openarc.env.getenv('frieze').runprops.home, 'domains', self.domain.domain, 'trust', self.trust_type.value)
+        return os.path.join(oaenv('frieze').runprops.home, 'domains', self.domain.domain, 'trust', self.trust_type.value)
 
 class CertAuthLetsEncrypt(CertAuthBase):
 
@@ -203,7 +203,7 @@ class CertAuthLetsEncrypt(CertAuthBase):
         self.acme_registration_file = os.path.join(self.root, 'registration.jwk')
 
         from ...provider import CloudProvider
-        self.dns_provider = CloudProvider[openarc.env.getenv('frieze').extdns['provider'].upper()]
+        self.dns_provider = CloudProvider[oaenv('frieze').extdns.provider.upper()]
 
     @property
     def is_valid(self):
@@ -288,7 +288,7 @@ class CertAuthLetsEncrypt(CertAuthBase):
 
         clargs = {
             'account' : self.acme_registration,
-            'user_agent' : openarc.env.getenv('frieze').acme['useragent']
+            'user_agent' : oaenv('frieze').acme.useragent
         }
 
         net = acme.client.ClientNetwork(key, **clargs)
@@ -349,11 +349,11 @@ class CertAuthLetsEncrypt(CertAuthBase):
         return {
             'prod'    : 'https://acme-v02.api.letsencrypt.org/directory',
             'staging' : 'https://acme-staging-v02.api.letsencrypt.org/directory'
-        }[openarc.env.getenv('frieze').acme['env']]
+        }[oaenv('frieze').acme.env]
 
     @property
     def root(self):
-        return os.path.join(super().root, openarc.env.getenv('frieze').acme['env'])
+        return os.path.join(super().root, oaenv('frieze').acme.env)
 
 class CertAuthInternal(CertAuthBase):
 
@@ -494,9 +494,9 @@ class CertAuthInternal(CertAuthBase):
     @property
     def is_intermediate_ca(self):
         try:
-            setattr(self, '_rootca_private_key_file', os.path.expanduser(openarc.env.getenv('frieze').rootca.private_key))
-            setattr(self, '_rootca_certificate_file', os.path.expanduser(openarc.env.getenv('frieze').rootca.certificate))
-            setattr(self, '_rootca_password', openarc.env.getenv('frieze').rootca.password.encode())
+            setattr(self, '_rootca_private_key_file', os.path.expanduser(oaenv('frieze').rootca.private_key))
+            setattr(self, '_rootca_certificate_file', os.path.expanduser(oaenv('frieze').rootca.certificate))
+            setattr(self, '_rootca_password', oaenv('frieze').rootca.password.encode())
         except KeyError:
             setattr(self, '_rootca_private_key_file', str())
             setattr(self, '_rootca_certificate_file', str())
@@ -529,7 +529,7 @@ class CertAuthInternal(CertAuthBase):
             )
 
         ### Set up bless call
-        config = BlessConfig(os.path.join(openarc.env.getenv('frieze').runprops.home, 'cfg', 'bless.cfg'))
+        config = BlessConfig(os.path.join(oaenv('frieze').runprops.home, 'cfg', 'bless.conf'))
         schema = BlessSchema(strict=True)
         schema.context[USERNAME_VALIDATION_OPTION] =\
             config.get(BLESS_OPTIONS_SECTION, USERNAME_VALIDATION_OPTION)
@@ -674,7 +674,7 @@ class ExtDNS(object):
     def __init__(self, domain):
         from ...provider import CloudProvider
         self.domain = domain
-        self.provider = CloudProvider[openarc.env.getenv('frieze').extdns['provider'].upper()]
+        self.provider = CloudProvider[oaenv('frieze').extdns.provider.upper()]
 
     def distribute(self):
         from ..._core import FIB

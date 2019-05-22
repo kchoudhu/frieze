@@ -2,7 +2,7 @@ __all__ = ['AwsShim']
 
 import boto3
 
-from openarc.env import getenv
+from openarc import oaenv
 
 from ._interface import CloudInterface
 
@@ -12,8 +12,8 @@ class AwsShim(CloudInterface):
         self.api =\
             boto3.client(
                 'route53',
-                aws_access_key_id=getenv('frieze').extcreds['aws']['apikey'],
-                aws_secret_access_key=getenv('frieze').extcreds['aws']['apisecret'],
+                aws_access_key_id=oaenv('frieze').extcreds.aws.apikey,
+                aws_secret_access_key=oaenv('frieze').extcreds.aws.apisecret,
             )
 
     def dns_list_zones(self, name=None):

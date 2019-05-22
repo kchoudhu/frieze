@@ -20,7 +20,7 @@ import gevent
 import hashlib
 import io
 import ipaddress
-import openarc.env
+import openarc
 import os
 import pkg_resources as pkg
 import pwd
@@ -33,9 +33,7 @@ import toml
 
 from pprint import pprint
 
-from openarc import staticproperty, oagprop
-from openarc.dao import OADbTransaction
-from openarc.graph import OAG_RootNode
+from openarc import *
 from openarc.exception import OAGraphRetrieveError, OAError
 
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
@@ -1588,7 +1586,7 @@ class OAG_Site(OAG_FriezeRoot):
     def configure(self):
 
         # Decide on directory to output files to
-        version_dir = os.path.join(openarc.env.getenv('frieze').runprops.home, 'domains', self.domain.domain, 'deploy', self.domain.version_name)
+        version_dir = os.path.join(oaenv('frieze').runprops.home, 'domains', self.domain.domain, 'deploy', self.domain.version_name)
 
         # Create configurations for each host. The configurations contain a
         # full suite of config files,
@@ -1892,7 +1890,7 @@ def set_domain(domain,
     os.chmod(cfg_directory, 0o700)
 
     ### Force openarc to use specified config
-    openarc.env.initenv(cfgfile=os.path.join(cfg_directory, 'openarc.conf'), reset=True)
+    oainit(cfgfile=os.path.join(cfg_directory, 'openarc.conf'), reset=True)
 
     cfg_file_path = os.path.join(cfg_directory, 'frieze.conf')
     print("Loading FRIEZE config: [%s]" % (cfg_file_path))
@@ -1900,7 +1898,7 @@ def set_domain(domain,
         with open(cfg_file_path) as f:
             appcfg = toml.loads(f.read())
             appcfg['runprops'] = { 'home' : operating_directory }
-            openarc.env.getenv().merge_app_cfg('frieze', appcfg)
+            oaenv.merge_app_cfg('frieze', appcfg)
 
     except IOError:
         raise OAError("%s does not exist" % cfg_file_path)
@@ -1929,12 +1927,12 @@ def set_domain(domain,
                 p_domain =\
                     OAG_Domain().db.create({
                         'domain'       : domain,
-                        'country'      : country if country else openarc.env.getenv('frieze').rootca.country,
-                        'province'     : province if province else openarc.env.getenv('frieze').rootca.province,
-                        'locality'     : locality if locality else openarc.env.getenv('frieze').rootca.locality,
+                        'country'      : country if country else oaenv('frieze').rootca.country,
+                        'province'     : province if province else oaenv('frieze').rootca.province,
+                        'locality'     : locality if locality else oaenv('frieze').rootca.locality,
                         'org'          : org,
-                        'org_unit'     : org_unit if org_unit else openarc.env.getenv('frieze').rootca.organization_unit,
-                        'contact'      : contact_email if contact_email else '%s@%s' % (openarc.env.getenv('frieze').rootca.contact_email, domain),
+                        'org_unit'     : org_unit if org_unit else oaenv('frieze').rootca.organization_unit,
+                        'contact'      : contact_email if contact_email else '%s@%s' % (oaenv('frieze').rootca.contact_email, domain),
                         'version_name' : str(),
                         'deployed'     : False,
                     })

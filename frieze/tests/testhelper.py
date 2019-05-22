@@ -9,8 +9,6 @@ import sys
 
 sys.path.append('../..')
 
-from textwrap    import dedent as td
-
 class TestBase(object):
     """Mixin class to assist with database testing"""
     def check_autonode_equivalence(self, oag1, oag2):
@@ -27,8 +25,8 @@ class TestBase(object):
             self.dbconn.commit()
 
     def setUp_db(self):
-        openarc.env.initenv(on_demand_oags=True)
-        self.dbconn = psycopg2.connect(**openarc.env.getenv().dbinfo)
+        openarc.oainit()
+        self.dbconn = psycopg2.connect(**{k:v for k, v in openarc.oaenv.dbinfo.items() if k!='on_demand_schema'})
         self.__kill_schemata()
 
     def tearDown_db(self):
@@ -37,5 +35,5 @@ class TestBase(object):
 
     class SQL(object):
         ## Test schema helper SQL
-        drop_test_schema = td("""
-            DROP SCHEMA IF EXISTS %s CASCADE""")
+        drop_test_schema =\
+            "DROP SCHEMA IF EXISTS %s CASCADE"
