@@ -25,5 +25,4 @@ setup(name='frieze',
         'openarc',
         'vultr'
       ],
-      include_package_data=True,
       zip_safe=False)
