@@ -142,7 +142,11 @@ def add(searchdir):
     modules = os.listdir(canonical_path)
     for module_name in modules:
         # Push module information into frieze.capability, and fix resource_path
-        module = importlib.import_module(module_name)
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            continue
+
         for m in dir(module):
             elem = getattr(module, m)
             if type(elem)==type and isinstance(elem(), CapabilityTemplate):
