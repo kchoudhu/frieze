@@ -34,6 +34,7 @@ import toml
 from pprint import pprint
 
 from openarc import *
+from openarc.time import OATime
 from openarc.exception import OAGraphRetrieveError, OAError
 
 from frieze.osinfo import HostOS, Tunable, TunableType, OSFamily
@@ -169,7 +170,15 @@ class OAG_FriezeRoot(OAG_RootNode):
 
         with OADbTransaction("Clone domain") as tran:
 
-            n_domain = self.db_clone_with_changes(self.root_domain, repl={'version_name' : str()})
+            n_domain =\
+                self.db_clone_with_changes(
+                    self.root_domain,
+                    repl={
+                        'version_name' : str(),
+                        'deployed' : False,
+                        'snaptime' : None
+                    }
+                )
 
             # TODO: this can be inferred recursively from forward keys
 
@@ -649,15 +658,16 @@ class OAG_Domain(OAG_FriezeRoot):
 
     @staticproperty
     def streams(cls): return {
-        'domain'       : [ 'text',    str(),  None ],
-        'country'      : [ 'text',    str(),  None ],
-        'province'     : [ 'text',    str(),  None ],
-        'locality'     : [ 'text',    str(),  None ],
-        'org'          : [ 'text',    str(),  None ],
-        'org_unit'     : [ 'text',    str(),  None ],
-        'contact'      : [ 'text',    str(),  None ],
-        'version_name' : [ 'text',    str(),  None ],
-        'deployed'     : [ 'boolean', bool(), None ],
+        'domain'       : [ 'text',      str(),  None ],
+        'country'      : [ 'text',      str(),  None ],
+        'province'     : [ 'text',      str(),  None ],
+        'locality'     : [ 'text',      str(),  None ],
+        'org'          : [ 'text',      str(),  None ],
+        'org_unit'     : [ 'text',      str(),  None ],
+        'contact'      : [ 'text',      str(),  None ],
+        'version_name' : [ 'text',      str(),  None ],
+        'deployed'     : [ 'boolean',   bool(), None ],
+        'snaptime'     : [ 'timestamp', None,   None ],
     }
 
     @friezetxn
@@ -888,6 +898,8 @@ class OAG_Domain(OAG_FriezeRoot):
         if not self.is_frozen:
             raise OAError("Can't deploy domain that hasn't been snapshotted")
 
+        oalog.info(f"Deplying snapshot [{self.version_name}]")
+
         def generate_domain_config():
             hostcfgs = {}
             for site in self.site:
@@ -950,6 +962,11 @@ class OAG_Domain(OAG_FriezeRoot):
                 # We'll need to log output here
                 print(output)
 
+        # Mark version as deployed
+        self.db.update({
+            'deployed' : True,
+        })
+
     @oagprop
     def extdns(self, **kwargs):
         return ExtDNS(self)
@@ -958,16 +975,22 @@ class OAG_Domain(OAG_FriezeRoot):
     def is_frozen(self):
         return len(self.version_name)>0
 
-    def snapshot(self, version_name):
+    def snapshot(self, version_prefix=str()):
         if self.version_name:
             raise OAError("This version has already been snapshot with [%s]" % self.version_name)
+
+        version_name = os.urandom(3).hex()
+        if version_prefix:
+            version_name = f"{version_prefix} {version_name}"
 
         try:
             version = OAG_Domain((self.domain, version_name), 'by_version_name')
             raise OAError(f"Snapshot [{version_name}] already exists")
         except OAGraphRetrieveError:
-            self.version_name = version_name
-            self.db.update()
+            self.db.update({
+                'version_name' : version_name,
+                'snaptime'     : OATime().now
+            })
 
         return self
 
@@ -1867,42 +1890,6 @@ def set_domain(domain,
 
     ##### Prepare operating environment
 
-    ### Does the operating directory exist?
-    operating_directory = os.path.expanduser('~/.frieze')
-    if not os.path.exists(operating_directory):
-        os.makedirs(operating_directory, mode=0o700)
-    os.chmod(operating_directory, 0o700)
-
-    ### Set up the database
-    db_directory = os.path.join(operating_directory, 'db')
-    if not os.path.exists(db_directory):
-        os.makedirs(db_directory, mode=0o700)
-    os.chmod(db_directory, 0o700)
-    # TODO: Boot a special frieze database here
-    # Mount dedicated, encrypted ZFS dataset at ${FRIEZE}/database
-    # Start pg database instance from ${FRIEZE}/database
-    # Configure openarc to use this db instance
-
-    ### Set up config directory
-    cfg_directory = os.path.join(operating_directory, 'cfg')
-    if not os.path.exists(cfg_directory):
-        os.makedirs(cfg_directory, mode=0o700)
-    os.chmod(cfg_directory, 0o700)
-
-    ### Force openarc to use specified config
-    oainit(cfgfile=os.path.join(cfg_directory, 'openarc.conf'), reset=True)
-
-    cfg_file_path = os.path.join(cfg_directory, 'frieze.conf')
-    print("Loading FRIEZE config: [%s]" % (cfg_file_path))
-    try:
-        with open(cfg_file_path) as f:
-            appcfg = toml.loads(f.read())
-            appcfg['runprops'] = { 'home' : operating_directory }
-            oaenv.merge_app_cfg('frieze', appcfg)
-
-    except IOError:
-        raise OAError("%s does not exist" % cfg_file_path)
-
     # Initialize the domain
     global p_domain
     gen_domain = False
@@ -1935,6 +1922,7 @@ def set_domain(domain,
                         'contact'      : contact_email if contact_email else '%s@%s' % (oaenv('frieze').rootca.contact_email, domain),
                         'version_name' : str(),
                         'deployed'     : False,
+                        'snaptime'     : None,
                     })
 
                 # Assign a subnet
