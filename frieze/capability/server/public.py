@@ -44,7 +44,7 @@ from bless.ssh.certificates.ssh_certificate_builder_factory import get_ssh_certi
 from marshmallow.exceptions import ValidationError
 
 from openarc      import *
-from openarc.time import OATime
+from openarc.time import OATime, coretime
 
 from frieze.provider import ExtCloud
 
@@ -594,7 +594,7 @@ class CertAuthInternal(CertAuthBase):
         key_id = 'Issued for [{}] using ssh_key [{}] valid_to [{}] executing [{}]'.format(
             kid_user,
             cert_builder.ssh_public_key.fingerprint,
-            time.strftime("%Y/%m/%d %H:%M:%S", time.gmtime(valid_before)),
+            coretime.strftime("%Y/%m/%d %H:%M:%S", coretime.gmtime(valid_before)),
             kid_command)
         if request.bastion_ips:
             cert_builder.set_critical_option_source_addresses(request.bastion_ips)
